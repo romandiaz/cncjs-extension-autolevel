@@ -19,8 +19,8 @@ The extension runs as a separate process that connects to the CNCjs server.
 
 1.  **Clone the repository**:
     ```bash
-    git clone https://github.com/kreso-t/cncjs-kt-ext.git
-    cd cncjs-kt-ext
+    git clone https://github.com/romandiaz/cncjs-extension-autolevel
+    cd cncjs-extension-autolevel
     ```
 
 2.  **Install dependencies**:
