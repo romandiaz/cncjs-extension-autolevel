@@ -140,6 +140,7 @@ You can also control the extension via G-code macros or the console.
 | :--- | :--- |
 | `(#autolevel)` | Probes the area defined by the loaded G-code bounds. |
 | `(#autolevel D[dist] H[ht] F[feed])` | Probes with custom **D**istance (grid step), **H**eight (retract), **F**eedrate. |
+| `(#autolevel GRID[points] X[xSize] Y[ySize])` | Probes by dividing the area into a specific number of `GRID` points (e.g., `GRID3` = 3x3 grid). Overrides Distance `D`. |
 | `(#autolevel_reapply)` | Re-applies the *previously* probed mesh to the currently loaded G-code (useful if you reload the file). |
 | `(#autolevel_get_mesh)` | Requests the current mesh data (used by the Visualizer to sync state). |
 | `(PROBEOPEN filename)` | Save probe results to a specific file. |
@@ -149,6 +150,9 @@ You can also control the extension via G-code macros or the console.
 ```gcode
 ; Probe every 10mm, retract 2mm, feedrate 50
 (#autolevel D10 H2 F50)
+
+; Probe 5x5 points over the loaded G-code area
+(#autolevel GRID5)
 ```
 
 ## Troubleshooting
