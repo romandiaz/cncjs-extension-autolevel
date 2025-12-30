@@ -1,126 +1,158 @@
-# **Auto-leveling extension for CNCjs**
+# CNCjs Autolevel Extension and Widget
 
-CNCjs Auto-leveling extension intended to be used primarily for PCB isolation milling. Currently only Grbl is supported/tested.
+This project provides auto-leveling capabilities for CNCjs, primarily designed for PCB isolation milling. It consists of two parts:
+1.  **Extension**: A backend service that interfaces with CNCjs to handle probing and G-code modification.
+2.  **Widget**: A frontend UI for CNCjs that provides a user-friendly interface for controlling the extension and visualizing the surface map.
 
-It will probe the surface (within gcode boundaries (xmin,ymin) - (xmax,ymax)) and transform the gcode currently loaded to cncjs and load auto-leveled gcode into CNCjs, ready to be run.
+## Project Structure
 
-## Install and run
+*   `src/extension/`: The backend Node.js extension.
+*   `src/widget/`: The frontend widget source code (HTML/JS/CSS).
 
-```bash
-git clone https://github.com/kreso-t/cncjs-kt-ext.git
-cd cncjs-kt-ext
-npm install
-npm start -- --port /dev/ttyACM0
-```
+---
 
-Once started it will (by default) connect to local cncjs server and register it self for listening and sending commands (similar way as i.e. cncjs keyboard pendant).
+## 1. Extension Setup
 
-To list all start options use:
-
-```bash
-node . --help
-```
-
-## Available Commands
-
-
-| Command  | Description |
-| -------------- | ---------- |
-| `(#autolevel)` | Probes the Z-offset in a grid way fixing the uploaded gcode. |
-| `(#autolevel_reapply)` | reapply previous probed Z-offset values when importing a new gcode |
-| `(PROBEOPEN filename)` | save the probed values to a file named 'filename'
-| `(PROBECLOSE)` | close the probe capture file opened with PROBEOPEN. This happens automatically when (#autolevel) completes, so this is only for probe commands issued by other software
-
-
-### Installation with `pm2`
-
-If you manage cncjs with `pm2`, you may want to manage this extension the same way. This assumes you've already set up [cncjs with pm2](https://cnc.js.org/docs/rpi-setup-guide/#install-production-process-manager-pm2).
-
-```bash
-git clone https://github.com/kreso-t/cncjs-kt-ext.git
-cd cncjs-kt-ext
-npm install
-cp pm2.example.config.js pm2.config.js
-pm2 start pm2.config.js
-pm2 save
-```
-
-This will start the extension in pm2 using the first user in your cncrc. If you wish to use a different user, you can modify the `pm2.config.js` to with command line options for the user name and id.
-
-## How to use
-    
-Jog your tool at PCB origin point and zero it (i.e. set work coordinates: 0,0,0).
-Then, by using a macro you may send the following command:
-
-```
-(#autolevel)
-```
-
-Without any options it will probe the area covered by the gcode every 10 mm, with travel height at 2 mm, and probing feedrate 50 mm/min.
-    
-Please, note that this command will be ignored when put inside the gcode file or type it in the console, you must run it from a macro.
-
-Once the probing is finished, the loaded gcode will be updated to reflect probed z levels and you may run the gcode.
-
-You can customize the probing distance, height and feedrate and/or probing mode by using the following syntax:
-
-```
-(#autolevel D[distance] H[height] F[feedrate] M[margin] P[probeOnly] X[xSize] Y[ySize])
-```
-
-The "probeOnly" value indicates if the probing should be applied to any loaded GCode or not. The default value of "0" indicates that yes, the probe results should be applied immediately to any loaded GCode.  A probeOnly of "1" indicates that
-probing should NOT be applied to any loaded GCode. This special mode is used in conjunction with the PROBEOPEN command to save probe values to an external file (see below). This is the only mode that allows probing to occur where no g-code is
-currently loaded.
-
-The probed area will be comprised of cells that are each "distance" in width and height. Normally, the area covered
-by the loaded gcode is probed. However, if no gcode is loaded (for example, in the case of a probeOnly), you can
-instead expliticly specify the max X,Y size with the xSize,ySize parameters.  In that case, the probe area will be 0,0 to xSize,YSize.
-
-
-If a new related gcode is needed, after the first mill process. Autolevel values can be reapplyed with the following command:
-
-```
-(#autolevel_reapply)
-```
-
-In the case of the different drill bit lengths, after changing the drill bit to another having different length, you have to Z-Probe the PCB surface at approximately starting point (xmin, ymin) and set the Z WCO to zero again before firing the `#autolevel_reapply` command.
-
-### Custom usage examples
-
-```
-(#autolevel D7.5 H1.0 F20 M0.2)
-```
-
-This will instruct it to use probing distance of 7.5 mm (i.e. distance in XY plane between probed points), travel height 1 mm and feedrate 20.0 mm/min considerin a margin of 0.2 mm around the PCB area.
-
-
-
-```
-(#autolevel P1 X30 Y50)
-```
-
-This will instruct it to probe an area area 30mm by 50 mm (starting at the work zero) using use default probing distance of 10 mm, travel height 2 mm and feedrate 50.0 mm/min. The loaded gcode will NOT be modified. If a (PROBEOPEN) has not been issued to save the values to a specific file, the probed values will be saved to a default file that can be used in a future run using (#autolevel_reapply).
-
-## CNCJS Widget
-
-This extension includes a custom CNCJS widget that provides a graphical interface for autoleveling and visualizing the mesh.
+The extension runs as a separate process that connects to the CNCjs server.
 
 ### Installation
 
-1.  Run `npm run build` in the root directory. This will create a `dist` folder containing the widget files.
-2.  You can use the widget in two ways:
-    *   **Hosted**: Serve the `dist` directory using a web server (e.g., `python -m http.server` or `npm install -g http-server && http-server .`). Then add a "Web Page" widget in CNCJS pointing to the hosted `index.html`.
-    *   **Mount**: Mount the `dist` folder in CNCJS using the `--mount` option:
-        ```bash
-        cncjs --mount /widget:/path/to/cncjs-kt-ext/dist
-        ```
+1.  **Clone the repository**:
+    ```bash
+    git clone https://github.com/kreso-t/cncjs-kt-ext.git
+    cd cncjs-kt-ext
+    ```
 
-### Features
+2.  **Install dependencies**:
+    ```bash
+    npm install
+    ```
 
-*   **Settings Panel**: Easily configure Feedrate, Height, Margin, and Grid Size.
-*   **Initiate Autolevel**: One-click button to start the autoleveling sequence with the configured settings.
-*   **Reapply Mesh**: Button to reapply the last saved mesh to the currently loaded G-code.
-*   **Mesh Visualizer**: Real-time 2D heatmap visualization of the probed points.
+### Running the Extension
 
-### Note on Visualizer
-The visualizer listens for specific G-code comments emitted by the extension. To view an existing mesh without re-probing, the widget automatically sends the `#autolevel_get_mesh` command on load, which triggers the extension to dump the current mesh data.
+Start the extension by running:
+
+```bash
+node src/extension/index.js [options]
+```
+
+**Common Examples:**
+
+*   **Standard Run** (Connects to default port `/dev/ttyACM0`):
+    ```bash
+    node src/extension/index.js
+    ```
+*   **Specific Port** (e.g., Windows COM port or Linux device):
+    ```bash
+    node src/extension/index.js --port COM3
+    # OR
+    node src/extension/index.js --port /dev/ttyUSB0
+    ```
+
+### Command Line Options
+
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `-p, --port <port>` | Serial port path or name | `/dev/ttyACM0` |
+| `-b, --baudrate <baud>`| Baud rate | `115200` |
+| `--socket-address <addr>` | Socket address or hostname | `localhost` |
+| `--socket-port <port>` | Socket port | `8000` |
+| `--controller-type` | Controller type (Grbl, Smoothie, TinyG) | `Grbl` |
+| `-s, --secret <secret>` | CNCjs secret key (reads from `~/.cncrc` if omitted) | |
+| `-i, --id <id>` | User ID (reads from `~/.cncrc` if omitted) | |
+
+### Running with PM2 (Recommended for Production)
+
+If you use PM2 to manage CNCjs, you can also use it for this extension:
+
+1.  Copy the example config:
+    ```bash
+    cp pm2.example.config.js pm2.config.js
+    ```
+2.  Edit `pm2.config.js` to match your system (e.g., correct `script` path, `args` for port).
+3.  Start and save:
+    ```bash
+    pm2 start pm2.config.js
+    pm2 save
+    ```
+
+---
+
+## 2. Widget Setup
+
+The widget provides the graphical interface inside CNCjs.
+
+### Installation in CNCjs
+
+There are two primary ways to load the widget into CNCjs: **mounting** (local) or **serving** (remote/network).
+
+#### Option A: Mounting (Recommended for Local Use)
+
+You can mount the `src/widget` directory directly into CNCjs using the `--mount` argument. This requires restarting your CNCjs server with the added flag.
+
+```bash
+cncjs --mount /widget:/path/to/cncjs-kt-ext/src/widget
+```
+*Replace `/path/to/...` with the actual absolute path to the repo on your machine.*
+
+#### Option B: Serving (For Remote Access)
+
+If you cannot easily modify the CNCjs start commands, you can serve the widget files using a simple HTTP server and point CNCjs to it.
+
+1.  navigate to the widget directory:
+    ```bash
+    cd src/widget
+    ```
+2.  Start a simple HTTP server (requires Python or `http-server` npm package):
+    ```bash
+    # Python 3
+    python -m http.server 8080 --bind 0.0.0.0
+    
+    # OR using Node.js
+    npx http-server . -p 8080 --cors
+    ```
+3.  In CNCjs, look for the "Manage Widgets" (or "Shop Floor Tablet") section and add a custom widget pointing to `http://<your-ip>:8080/index.html`.
+
+---
+
+## 3. Usage
+
+### Widget Interface
+
+Once the widget is loaded in CNCjs:
+
+1.  **Status**: Ensure the widget shows "Connected" (or similar status indicating it sees the extension).
+2.  **Settings**:
+    *   **Leveling**: Set Probe Feedrate, Touch Plate Height, Margin, and Grid Size (X/Y step).
+    *   **Skew**: Configure skew detection settings if needed.
+3.  **Probing**:
+    *   **Initiate Surface Map**: Starts the probing process based on your loaded G-code or manual bounds.
+    *   **Measure Skew**: Probes two points to calculate and compensate for workpiece rotation.
+4.  **Visualizer**:
+    *   Displays a real-time heightmap of the probed PCB surface.
+    *   **Apply Mesh**: Modifies the currently loaded G-code with the mesh data.
+
+### Macros & Commands
+
+You can also control the extension via G-code macros or the console.
+
+| Command | Description |
+| :--- | :--- |
+| `(#autolevel)` | Probes the area defined by the loaded G-code bounds. |
+| `(#autolevel D[dist] H[ht] F[feed])` | Probes with custom **D**istance (grid step), **H**eight (retract), **F**eedrate. |
+| `(#autolevel_reapply)` | Re-applies the *previously* probed mesh to the currently loaded G-code (useful if you reload the file). |
+| `(#autolevel_get_mesh)` | Requests the current mesh data (used by the Visualizer to sync state). |
+| `(PROBEOPEN filename)` | Save probe results to a specific file. |
+| `(PROBECLOSE)` | Close the probe file (invoked automatically by `#autolevel`). |
+
+**Example Macro:**
+```gcode
+; Probe every 10mm, retract 2mm, feedrate 50
+(#autolevel D10 H2 F50)
+```
+
+## Troubleshooting
+
+*   **"Socket Disconnected"**: Ensure the extension process (`node src/extension/index.js`) is running and has not crashed.
+*   **Permissions**: On Linux, ensure the user running the extension has access to the serial port (usually `dialout` group).
+*   **Widget not loading**: Check the browser console (F12) for 404 errors. Verify the mount path or HTTP server URL.

@@ -96,11 +96,18 @@ class Mesh {
         const rowLow = this.grid[r];
         const rowHi = this.grid[r + 1];
 
-        if (!rowLow || !rowHi) return this.grid[0][0].z; // Should not happen given checks
+        if (!rowLow || !rowHi) {
+            // Fallback for edge cases where we might be at the very top/bottom edge 
+            // or grid is irregular.
+            if (rowLow && rowLow.length > 0) return rowLow[0].z;
+            return 0;
+        }
 
         // 2. Find Column Index (c) within the row
         // We assume rowLow and rowHi have essentially the same X coordinates.
         // We use rowLow for X search.
+
+        if (rowLow.length === 0) return 0; // Integrity check
 
         let c = 0;
         const startX = rowLow[0].x;
@@ -136,10 +143,10 @@ class Mesh {
         // Q22 = (x2, y2) = rowHi[c+1]
 
         // Check availability
-        if (!rowHi[c] || !rowHi[c + 1]) {
+        if (!rowLow[c] || !rowLow[c + 1] || !rowHi[c] || !rowHi[c + 1]) {
             // Grid might be jagged. Fallback to nearest neighbor or simple interpolation on rowLow.
-            // For now, return simple average or just Q11
-            return rowLow[c].z;
+            if (rowLow[c]) return rowLow[c].z;
+            return 0;
         }
 
         const Q11 = rowLow[c];

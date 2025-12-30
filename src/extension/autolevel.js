@@ -6,7 +6,10 @@ const Mesh = require('./mesh')
 
 const alFileNamePrefix = '#AL:'
 
-const DEFAULT_PROBE_FILE = '__last_Z_probe.txt';
+const path = require('path');
+const DEFAULT_PROBE_FILE = path.join(__dirname, '../../__last_Z_probe.txt');
+const SETTINGS_FILE = path.join(__dirname, '../../autolevel_settings.json');
+
 
 const Units = {
   MILLIMETERS: 1,
@@ -47,6 +50,7 @@ module.exports = class Autolevel {
       y: 0,
       z: 0
     }
+    this.skewAngle = 0; // Skew angle in radians. Positive = Counter-Clockwise rotation of the part.
     this.mpos = { x: 0, y: 0, z: 0 };
     this.pos = { x: 0, y: 0, z: 0 };
     this.gcodeBounds = null;
@@ -75,34 +79,38 @@ module.exports = class Autolevel {
     });
 
     // Try to read in any pre-existing probe data...
-    fs.readFile(DEFAULT_PROBE_FILE, 'utf8', (err, data) => {
-      if (!err) {
-        try {
-          console.log(`Loading previous probe from ${DEFAULT_PROBE_FILE}`)
-          this.probedPoints = [];
-          let lines = data.split('\n');
-          let pnum = 0;
-          lines.forEach(line => {
-            let vals = line.split(' ');
-            if (vals.length >= 3) {
-              let pt = {
-                x: parseFloat(vals[0]),
-                y: parseFloat(vals[1]),
-                z: parseFloat(vals[2])
-              };
-              this.probedPoints.push(pt);
-              pnum++;
-              console.log(`point ${pnum} X:${pt.x} Y:${pt.y} Z:${pt.z}`);
-            }
-          });
-          console.log(`Read ${this.probedPoints.length} probed points from previous session`);
-        }
-        catch (err2) {
-          this.probedPoints = [];
-          console.log(`Failed to read probed points from prevoius session: ${err2}`);
-        }
+    // Try to read in any pre-existing probe data...
+    try {
+      if (fs.existsSync(DEFAULT_PROBE_FILE)) {
+        console.log(`Loading previous probe from ${DEFAULT_PROBE_FILE}`)
+        const data = fs.readFileSync(DEFAULT_PROBE_FILE, 'utf8');
+        this.sckw.sendMessage(`(AL: DEBUG: Loading probe file: ${DEFAULT_PROBE_FILE})`);
+
+        this.probedPoints = [];
+        let lines = data.split('\n');
+        let pnum = 0;
+        lines.forEach(line => {
+          let vals = line.split(' ');
+          if (vals.length >= 3) {
+            let pt = {
+              x: parseFloat(vals[0]),
+              y: parseFloat(vals[1]),
+              z: parseFloat(vals[2])
+            };
+            this.probedPoints.push(pt);
+            pnum++;
+          }
+        });
+        console.log(`Read ${this.probedPoints.length} probed points from previous session`);
+        this.sckw.sendMessage(`(AL: DEBUG: Loaded ${this.probedPoints.length} points)`);
+      } else {
+        this.sckw.sendMessage(`(AL: DEBUG: Probe file not found: ${DEFAULT_PROBE_FILE})`);
       }
-    });
+    } catch (err) {
+      console.log(`Failed to read probed points from previous session: ${err}`);
+      this.probedPoints = [];
+      this.sckw.sendMessage(`(AL: DEBUG: Error reading probe file: ${err.message})`);
+    }
 
     socket.on('gcode:load', (file, gc) => {
       if (!file.startsWith(alFileNamePrefix)) {
@@ -171,7 +179,7 @@ module.exports = class Autolevel {
 
     socket.on('serialport:read', (data) => {
       // DEBUG: Log raw data length and snippet
-      console.log(`DEBUG: Raw Serial Data (${data.length}): ${JSON.stringify(data.toString())}`);
+      // console.log(`DEBUG: Raw Serial Data (${data.length}): ${JSON.stringify(data.toString())}`);
 
       // Append new data to buffer
       this.buffer += data.toString();
@@ -179,8 +187,9 @@ module.exports = class Autolevel {
       // Process all complete lines in buffer
       // Pattern-based processing (Robust to missing newlines)
       if (this.buffer.length > 5000) {
+        // Keep more context to avoid cutting mid-message
         console.log('DEBUG: Trimming large buffer to prevent overflow');
-        this.buffer = this.buffer.substring(this.buffer.length - 2000);
+        this.buffer = this.buffer.substring(this.buffer.length - 4000);
       }
 
       while (true) {
@@ -196,7 +205,8 @@ module.exports = class Autolevel {
 
         console.log('DEBUG: Processing extracted PRB chunk:', prbLine);
 
-        let prbm = /\[PRB:([\+\-\.\d]+),([\+\-\.\d]+),([\+\-\.\d]+),?([\+\-\.\d]+)?:(\d)\]/.exec(prbLine)
+        // Relaxed Regex: Handles optional spaces, optional 4th coordinate, optional success flag
+        let prbm = /\[PRB:\s*([\+\-\.\d]+)\s*,\s*([\+\-\.\d]+)\s*,\s*([\+\-\.\d]+)/.exec(prbLine)
         if (prbm) {
           let prb = [parseFloat(prbm[1]), parseFloat(prbm[2]), parseFloat(prbm[3])]
           let pt = {
@@ -220,13 +230,13 @@ module.exports = class Autolevel {
               this.sum_dz += pt.z;
             }
             this.probedPoints.push(pt)
-            this.sckw.sendGcode(`(AL: PROBED ${pt.x} ${pt.y} ${pt.z})`)
+            this.sckw.sendMessage(`(AL: PROBED ${pt.x} ${pt.y} ${pt.z})`)
 
             console.log('probed ' + this.probedPoints.length + '/' + this.planedPointCount + '>', pt.x.toFixed(3), pt.y.toFixed(3), pt.z.toFixed(3))
 
             if (this.probedPoints.length >= this.planedPointCount) {
               console.log('DEBUG: Probing complete. Total points: ' + this.probedPoints.length);
-              this.sckw.sendGcode(`(AL: dz_min=${this.min_dz.toFixed(3)}, dz_max=${this.max_dz.toFixed(3)}, dz_avg=${(this.sum_dz / this.probedPoints.length).toFixed(3)})`);
+              this.sckw.sendMessage(`(AL: dz_min=${this.min_dz.toFixed(3)}, dz_max=${this.max_dz.toFixed(3)}, dz_avg=${(this.sum_dz / this.probedPoints.length).toFixed(3)})`);
               if (this.probeFile) {
                 this.fileClose();
               }
@@ -235,7 +245,7 @@ module.exports = class Autolevel {
                 this.applyCompensation()
               } else {
                 console.log('DEBUG: Probe Only mode. Finished.');
-                this.sckw.sendGcode('(AL: finished)');
+                this.sckw.sendMessage('(AL: finished)');
               }
               this.planedPointCount = 0
               this.wco = { x: 0, y: 0, z: 0 }
@@ -243,6 +253,8 @@ module.exports = class Autolevel {
           } else {
             console.log('DEBUG: Ignored PRB (planedPointCount <= 0):', this.planedPointCount);
           }
+        } else {
+          console.log('DEBUG: Failed to parse PRB line:', prbLine);
         }
       }
     })
@@ -254,11 +266,11 @@ module.exports = class Autolevel {
     try {
       this.probeFile = fs.openSync(fileName, "w");
       console.log(`Opened probe file ${fileName}`);
-      this.sckw.sendGcode(`(AL: Opened probe file ${fileName})`)
+      this.sckw.sendMessage(`(AL: Opened probe file ${fileName})`)
     }
     catch (err) {
       this.probeFile = 0;
-      this.sckw.sendGcode(`(AL: Could not open probe file ${err})`)
+      this.sckw.sendMessage(`(AL: Could not open probe file ${err})`)
     }
   }
 
@@ -272,26 +284,135 @@ module.exports = class Autolevel {
 
   dumpMesh() {
     if (this.probedPoints.length === 0) {
-      this.sckw.sendGcode('(AL: no mesh data)')
+      this.sckw.sendMessage('(AL: no mesh data - points array is empty)')
       return
     }
-    this.sckw.sendGcode('(AL: dumping mesh start)')
-    this.probedPoints.forEach(pt => {
-      this.sckw.sendGcode(`(AL: PROBED ${pt.x} ${pt.y} ${pt.z})`)
-    })
-    this.sckw.sendGcode('(AL: finished)')
+    this.sckw.sendMessage('(AL: dumping mesh start)')
+
+    // Pack points to reduce "ok" spam
+    let buffer = '(AL: D';
+    let count = 0;
+
+    this.probedPoints.forEach((pt, index) => {
+      const ptStr = ` ${pt.x.toFixed(3)},${pt.y.toFixed(3)},${pt.z.toFixed(3)}`;
+
+      // Grbl line limit is usually 128. Keep it safe at ~125.
+      if (buffer.length + ptStr.length > 125) {
+        this.sckw.sendMessage(buffer + ')');
+        buffer = '(AL: D' + ptStr;
+        count = 1;
+      } else {
+        buffer += ptStr;
+        count++;
+      }
+    });
+
+    // Flush remaining
+    if (count > 0) {
+      this.sckw.sendMessage(buffer + ')');
+    }
+
+    this.sckw.sendMessage('(AL: finished)')
   }
 
   reapply(cmd, context) {
     if (!this.gcode) {
-      this.sckw.sendGcode('(AL: no gcode loaded)')
+      this.sckw.sendMessage('(AL: no gcode loaded)')
       return
     }
     if (this.probedPoints.length < 3) {
-      this.sckw.sendGcode('(AL: no previous autolevel points)')
+      this.sckw.sendMessage('(AL: no previous autolevel points)')
       return;
     }
     this.applyCompensation();
+    this.dumpMesh();
+  }
+
+  setSkew(cmd, context) {
+    let a = /A([\.\+\-\d]+)/gi.exec(cmd);
+    if (a) {
+      // Input angle assumed to be in degrees
+      const angleDeg = parseFloat(a[1]);
+      // Convert to radians
+      this.skewAngle = angleDeg * Math.PI / 180;
+      console.log(`Skew angle set to: ${angleDeg} deg (${this.skewAngle} rad)`);
+      this.sckw.sendMessage(`(AL: Skew angle set to ${angleDeg.toFixed(3)} deg)`);
+    } else {
+      // If no argument, reset? or report?
+      this.sckw.sendMessage(`(AL: Current Skew: ${(this.skewAngle * 180 / Math.PI).toFixed(3)} deg)`);
+    }
+  }
+
+  fetchSettings() {
+    try {
+      if (fs.existsSync(SETTINGS_FILE)) {
+        const data = fs.readFileSync(SETTINGS_FILE, 'utf8');
+        console.log('Settings loaded from file:', SETTINGS_FILE);
+        // Compact it for sending? It's JSON, should be fine.
+        // We will send it as a single line command response
+        this.sckw.sendMessage(`(AL: SETTINGS ${data})`);
+      } else {
+        console.log('No settings file found, sending empty object.');
+        this.sckw.sendMessage('(AL: SETTINGS {})');
+      }
+    } catch (err) {
+      console.error('Error reading settings file:', err);
+      this.sckw.sendMessage('(AL: ERROR: Could not read settings)');
+    }
+  }
+
+  saveSettings(cmd) {
+    // CMD format: (autolevel_save_settings <JSON_STRING>)
+    // We need to extract the JSON string.
+    // It's safer to rely on a specific marker or just parse valid JSON from the end.
+    // Let's assume the command is: (autolevel_save_settings { ... })
+    // We can strip the prefix and the trailing ')'
+
+    const prefix = 'settings ';
+    const idx = cmd.indexOf(prefix);
+    if (idx === -1) {
+      console.error('Invalid save settings command format');
+      return;
+    }
+
+    let jsonStr = cmd.substring(idx + prefix.length).trim();
+    // remove trailing ')' if present (it should be)
+    if (jsonStr.endsWith(')')) {
+      jsonStr = jsonStr.substring(0, jsonStr.length - 1);
+    }
+
+    try {
+      // Validate JSON
+      JSON.parse(jsonStr);
+      fs.writeFileSync(SETTINGS_FILE, jsonStr);
+      console.log('Settings saved to:', SETTINGS_FILE);
+      this.sckw.sendMessage('(AL: Settings saved successfully)');
+    } catch (err) {
+      console.error('Error saving settings:', err);
+      this.sckw.sendMessage(`(AL: ERROR: Could not save settings - ${err.message})`);
+    }
+  }
+
+  /**
+   * Rotates a point around (0,0) by this.skewAngle
+   * @param {Object} pt {x, y, z}
+   * @returns {Object} Rotated point
+   */
+  rotatePoint(pt) {
+    if (Math.abs(this.skewAngle) < 1e-6) return pt;
+
+    // Rotation Matrix for Counter-Clockwise rotation:
+    // x' = x cos(theta) - y sin(theta)
+    // y' = x sin(theta) + y cos(theta)
+
+    const cos = Math.cos(this.skewAngle);
+    const sin = Math.sin(this.skewAngle);
+
+    return {
+      x: pt.x * cos - pt.y * sin,
+      y: pt.x * sin + pt.y * cos,
+      z: pt.z
+    };
   }
 
   start(cmd, context) {
@@ -305,7 +426,7 @@ module.exports = class Autolevel {
     if (p) this.probeOnly = parseFloat(p[1])
 
     if (!this.gcode) {
-      this.sckw.sendGcode('(AL: no gcode loaded)')
+      this.sckw.sendMessage('(AL: no gcode loaded)')
       if (!this.probeOnly) {
         return
       }
@@ -318,7 +439,7 @@ module.exports = class Autolevel {
       this.fileOpen(DEFAULT_PROBE_FILE);
     }
 
-    this.sckw.sendGcode('(AL: auto-leveling started)')
+    this.sckw.sendMessage('(AL: auto-leveling started)')
     let m = /D([\.\+\-\d]+)/gi.exec(cmd)
     if (m) this.delta = parseFloat(m[1])
 
@@ -542,11 +663,13 @@ module.exports = class Autolevel {
       z: v.z / dist
     } // direction vector
     let maxSegLength = Units.convert(this.delta, Units.MILLIMETERS, units) / 2
-    res.push({
-      x: p1.x,
-      y: p1.y,
-      z: p1.z
-    }) // first point
+    if (maxSegLength <= 0.001) maxSegLength = 0.5; // Safety check to prevent infinite loop
+
+    // res.push({
+    //   x: p1.x,
+    //   y: p1.y,
+    //   z: p1.z
+    // }) // first point - REMOVED to avoid redundant move to start position
     for (let d = maxSegLength; d < dist; d += maxSegLength) {
       this.appendPointSkipDuplicate(res, {
         x: p1.x + dir.x * d,
@@ -592,152 +715,165 @@ module.exports = class Autolevel {
    * Interpolates an arc (G2/G3) into linear segments for Z-compensation.
    * @param {Object} p1 Start point {x,y,z}
    * @param {Object} p2 End point {x,y,z}
-   * @param {Object} args Arc arguments (I, J, R, etc.)
+   * @param {Object} args Arc arguments (I, J, K, R, P)
    * @param {boolean} clockwise True for G2, False for G3
-   * @param {number} units Units constant (MILLIMETERS or INCHES)
+   * @param {number} units Units constant
+   * @param {number} plane Plane constant (0=XY, 1=XZ, 2=YZ)
    * @returns {Array} Array of points {x,y,z} along the arc
    */
-  interpolateArc(p1, p2, args, clockwise, units) {
+  interpolateArc(p1, p2, args, clockwise, units, plane) {
     let points = [];
+    plane = plane || 0; // Default to XY
 
-    // Convert current units to MM for calculation if needed, but easier to work in current units 
-    // provided 'delta' scale matches. 'this.delta' is likely in MM if defaults kept, 
-    // but user might have set it. 
-    // Standard approach: Perform math in current units. 
-    // If units=INCHES, this.delta (10mm default) might need conversion?
-    // autolevel.js uses 'Units.convert' but 'delta' seems to be widely used as MM.
+    // Helper to map 3D point to 2D plane coordinates (u, v) and linear axis (w)
+    // G17 (XY): u=x, v=y, w=z. Center offsets: I->u, J->v
+    // G18 (XZ): u=z, v=x, w=y. Center offsets: K->u, I->v (Note: G18 is ZX plane usually)
+    // G19 (YZ): u=y, v=z, w=x. Center offsets: J->u, K->v
+    const toPlane = (p) => {
+      if (plane === 1) return { u: p.z, v: p.x, w: p.y }; // XZ (Technically ZX)
+      if (plane === 2) return { u: p.y, v: p.z, w: p.x }; // YZ
+      return { u: p.x, v: p.y, w: p.z }; // XY
+    };
 
-    // Let's normalize to MM for calculation to match 'splitToSegments' logic roughly
-    // Or just respect the unit passed.
-    // If existing code uses 'Units.convert(this.delta, Units.MILLIMETERS, units)' => converts delta(MM) to CurrentUnits.
+    const fromPlane = (u, v, w) => {
+      if (plane === 1) return { x: v, y: w, z: u };
+      if (plane === 2) return { x: w, y: u, z: v };
+      return { x: u, y: v, z: w };
+    };
 
-    // Use a fixed high resolution for Arcs to ensure smoothness, regardless of probe grid size.
-    // 0.5mm is usually good for 3D printing/CNC.
+    let start = toPlane(p1);
+    let end = toPlane(p2);
+
+    // MapCenter Offsets
+    let i_local = 0;
+    let j_local = 0;
+
+    if (plane === 1) { // G18 (XZ): I->X(v), K->Z(u)
+      i_local = args.K || 0; // u-offset (Z)
+      j_local = args.I || 0; // v-offset (X)
+    } else if (plane === 2) { // G19 (YZ): J->Y(u), K->Z(v)
+      i_local = args.J || 0; // u-offset
+      j_local = args.K || 0; // v-offset
+    } else { // G17 (XY): I->X(u), J->Y(v)
+      i_local = args.I || 0;
+      j_local = args.J || 0;
+    }
+
+    // Use a fixed high resolution for Arcs
     let maxSegLength = Units.convert(0.5, Units.MILLIMETERS, units);
-    if (maxSegLength <= 0) maxSegLength = 0.5; // Safety
+    if (maxSegLength <= 0) maxSegLength = 0.5;
 
     // 1. Find Center
-    let cx, cy, radius;
+    let cx, cy, radius; // cx,cy here refer to u,v center
 
-    // I, J mode
-    if (args.I !== undefined || args.J !== undefined) {
-      let i = args.I || 0;
-      let j = args.J || 0;
-      cx = p1.x + i;
-      cy = p1.y + j;
-      radius = Math.sqrt(i * i + j * j);
+    // I, J, K mode
+    if (args.I !== undefined || args.J !== undefined || args.K !== undefined) {
+      cx = start.u + i_local;
+      cy = start.v + j_local;
+      radius = Math.sqrt(i_local * i_local + j_local * j_local);
     }
     // R mode
     else if (args.R !== undefined) {
       let r = args.R;
-      // Calculate center from R... (Math heavy, skipping if not strictly needed now or implementation complex)
-      // Usually I/J is standard for cam, but R is common.
-      // Let's implement R for completeness.
-
-      let d2 = (p2.x - p1.x) * (p2.x - p1.x) + (p2.y - p1.y) * (p2.y - p1.y);
+      let d2 = (end.u - start.u) * (end.u - start.u) + (end.v - start.v) * (end.v - start.v);
       let d = Math.sqrt(d2);
+
       if (d < 1e-9 || Math.abs(r) < d / 2) {
-        // Invalid R or full circle impossible with R? 
-        // Fallback to line
         return [p2];
       }
 
-      // ... Math for R center ...
-      // Let's stick to I/J first as it's most common in generated code, 
-      // but R is important. 
-      // Simplified: Just Linearize if R is too hard? No, user asked for arc support.
-      // Reference: https://linuxcnc.org/docs/html/gcode/g-code.html#G2-G3-Arc
-
-      // Calculate distance between points
-      let dx = p2.x - p1.x;
-      let dy = p2.y - p1.y;
-
-      // Determine center
-      // H = sqrt(r^2 - (d/2)^2)
       let h = Math.sqrt(Math.max(0, r * r - d2 / 4));
+      let x2 = (start.u + end.u) / 2;
+      let y2 = (start.v + end.v) / 2;
+      let dx = end.u - start.u;
+      let dy = end.v - start.v;
 
-      let x2 = (p1.x + p2.x) / 2;
-      let y2 = (p1.y + p2.y) / 2;
+      const isLeft = (clockwise === (r < 0));
 
-      if (clockwise === (r < 0)) {
-        // Center is "to the right" / wrong side?
-        // G2 (CW): r>0 -> center right of chord?
-        // Correct math:
-        cx = x2 + h * dy / d;
-        cy = y2 - h * dx / d;
+      if (isLeft) {
+        cx = x2 - dy * (h / d);
+        cy = y2 + dx * (h / d);
       } else {
-        cx = x2 - h * dy / d;
-        cy = y2 + h * dx / d;
+        cx = x2 + dy * (h / d);
+        cy = y2 - dx * (h / d);
       }
-      // wait, logic for R sign and direction is tricky.
-      // Let's trust standard formula or just support I/J primarily if simpler.
-      // Many senders convert R to I/J.
-      // Assuming I/J is present in args if available.
       radius = Math.abs(r);
     } else {
-      // No arc info, treat as line
       return [p2];
     }
 
     // 2. Angles
-    let startAngle = Math.atan2(p1.y - cy, p1.x - cx);
-    let endAngle = Math.atan2(p2.y - cy, p2.x - cx);
-
+    let startAngle = Math.atan2(start.v - cy, start.u - cx);
+    let endAngle = Math.atan2(end.v - cy, end.u - cx);
     let diff = endAngle - startAngle;
 
     // Normalize
-    if (clockwise) { // G2
+    if (clockwise) {
       if (diff >= 0) diff -= 2 * Math.PI;
-    } else { // G3
+    } else {
       if (diff <= 0) diff += 2 * Math.PI;
+    }
+
+    // Apply number of turns (P)
+    if (args.P !== undefined && args.P > 0) {
+      let fullTurns = Math.floor(args.P);
+      if (fullTurns >= 1) {
+        diff += (clockwise ? -1 : 1) * (fullTurns - 1) * 2 * Math.PI;
+      }
     }
 
     // Length of arc
     let arcLen = Math.abs(diff * radius);
+
+    // FIX: Detect "Corkscrew" artifact where noise causes a tiny segment to be interpreted as a full circle.
+    // Heuristic: If the generated arc length is disproportionately larger than the chord length (straight line distance),
+    // and the chord length is small (suggesting a tiny move was intended), we linearize it.
+    // A full circle (360 deg) has arcLen = 2*PI*R. Chord = 0 (or close to it). 
+    // If the user INTENDED a full circle, P1 would be approx P2.
+    // If P1 differs from P2 (chord > epsilon), and we generated a huge arc, it's likely a direction flip error.
+
+    let chordLen = Math.sqrt(this.distanceSquared2(p1, p2));
+
+    // Thresholds:
+    // 1. Chord is "small" (e.g. < 2mm or < 0.1 inches). Let's use 1.0mm as safe upper bound for "tiny segments".
+    // 2. ArcLen is "huge" compared to Chord (e.g. > 10x). 
+    //    A semicircle (180 deg) has Arc/Chord = 1.57. 
+    //    A 300 deg arc has Arc/Chord of high value. 
+    //    A full circle artifact has Arc/Chord > 100 usually.
+    //    Let's check for ArcLen > 5 * ChordLen.
+
+    let smallChordThresh = Units.convert(1.0, Units.MILLIMETERS, units); // 1mm
+    // Check chordLen against threshold (must be non-zero to avoid div by zero, though logic handles it)
+
+    if (chordLen > 1e-9 && chordLen < smallChordThresh) {
+      if (arcLen > 10 * chordLen) {
+        console.log(`AL: Auto-correction - Linearized potential arc artifact. Chord:${chordLen.toFixed(4)} Arc:${arcLen.toFixed(4)}`);
+        return [p2];
+      }
+    }
+
     let segments = Math.ceil(arcLen / maxSegLength);
     if (segments < 1) segments = 1;
 
     let thetaStep = diff / segments;
-    let zStep = (p2.z - p1.z) / segments;
+    let wStep = (end.w - start.w) / segments;
 
     for (let i = 1; i <= segments; i++) {
       let angle = startAngle + i * thetaStep;
-      points.push({
-        x: cx + radius * Math.cos(angle),
-        y: cy + radius * Math.sin(angle),
-        z: p1.z + i * zStep
-      });
+      let u = cx + radius * Math.cos(angle);
+      let v = cy + radius * Math.sin(angle);
+      let w = start.w + i * wStep;
+
+      points.push(fromPlane(u, v, w));
     }
 
     return points;
   }
 
-  compensateZCoord(pt_in_or_mm, input_units) {
 
-    let pt_mm = {
-      x: Units.convert(pt_in_or_mm.x, input_units, Units.MILLIMETERS),
-      y: Units.convert(pt_in_or_mm.y, input_units, Units.MILLIMETERS),
-      z: Units.convert(pt_in_or_mm.z, input_units, Units.MILLIMETERS)
-    }
-
-    // Use Mesh to interpolate Z level at this location
-    let planeZ = 0;
-    if (this.mesh) {
-      planeZ = this.mesh.interpolateZ(pt_mm.x, pt_mm.y);
-    }
-
-    let newZ = pt_mm.z + planeZ;
-
-    return {
-      x: Units.convert(pt_mm.x, Units.MILLIMETERS, input_units),
-      y: Units.convert(pt_mm.y, Units.MILLIMETERS, input_units),
-      z: Units.convert(newZ, Units.MILLIMETERS, input_units)
-    }
-  }
 
   applyCompensation() {
-    this.sckw.sendGcode(`(AL: applying ...)\n`)
-
+    this.sckw.sendMessage(`(AL: applying ...)`)
 
     console.log('applying compensation ...')
 
@@ -746,199 +882,236 @@ module.exports = class Autolevel {
       this.mesh = new Mesh(this.probedPoints);
       console.log('DEBUG: Mesh initialized');
 
+      // Calculate Mesh Offset at (0,0) (Work Origin)
+      this.meshZeroOffset = 0;
+      try {
+        this.meshZeroOffset = this.mesh.interpolateZ(0, 0);
+        console.log(`DEBUG: Mesh Z-Offset at (0,0) is ${this.meshZeroOffset.toFixed(3)} mm`);
+        this.sckw.sendMessage(`(AL: Mesh normalized to Z=${this.meshZeroOffset.toFixed(3)} at origin)`);
+      } catch (err) {
+        console.error('Failed to calculate mesh zero offset:', err);
+      }
+
       let lines = this.gcode.split('\n')
-      let p0 = { x: 0, y: 0, z: 0 }
+      let p0 = { x: 0, y: 0, z: undefined }
       let p0_initialized = false
-      let pt = { x: 0, y: 0, z: 0 }
+      let pt = { x: 0, y: 0, z: undefined }
+
+      // Plane Constants
+      const PLANE_XY = 0;
+      const PLANE_XZ = 1;
+      const PLANE_YZ = 2;
 
       let abs = true
       let units = Units.MILLIMETERS
-      let modalMotion = 'G0'; // Default to G0/G1 (Linear) - usually safe assumption or assume G0.
+      let modalMotion = 'G0';
+      let plane = PLANE_XY;
 
       let result = []
       let lc = 0;
 
       lines.forEach(line => {
-        if (lc % 1000 === 0) {
-          console.log(`progress info ... line: ${lc}/${lines.length}`);
-          this.sckw.sendGcode(`(AL: progress ...  ${lc}/${lines.length})`)
-        }
-        lc++;
-
-        if (line.match(/^\s*\([^\)]*\)\s*$/g)) {
-          result.push(line.trim());
-          return;
-        }
-
-        let lineStripped = this.stripComments(line)
-        if (!lineStripped) {
-          // Preserve comments or empty lines
-          result.push(line);
-          return;
-        }
-
-        // 1. Detect State Changes (Modal)
-        if (/G91/i.test(lineStripped)) abs = false
-        if (/G90/i.test(lineStripped)) abs = true
-        if (/G20/i.test(lineStripped)) units = Units.INCHES
-        if (/G21/i.test(lineStripped)) units = Units.MILLIMETERS
-
-        // Detect Group 1 Motion Modes
-        // G0, G1, G2, G3, G38.2...
-        // We match strict word boundaries or start of line
-        let motionMatch = /(G0?[0123](?![0-9])|G38\.\d|G80)/i.exec(lineStripped);
-        if (motionMatch) {
-          // Normalize G00->G0, G01->G1
-          let m = motionMatch[1].toUpperCase().replace(/^G0(\d)/, 'G$1');
-          modalMotion = m;
-        }
-
-        // 2. Update Virtual Position (pt)
-        let hasMove = false;
-        let target = { ...pt };
-
-        let xMatch = /X([\.\+\-\d]+)/gi.exec(lineStripped)
-        if (xMatch) {
-          let val = parseFloat(xMatch[1]);
-          target.x = abs ? val : pt.x + val;
-          hasMove = true;
-        }
-
-        let yMatch = /Y([\.\+\-\d]+)/gi.exec(lineStripped)
-        if (yMatch) {
-          let val = parseFloat(yMatch[1]);
-          target.y = abs ? val : pt.y + val;
-          hasMove = true;
-        }
-
-        let zMatch = /Z([\.\+\-\d]+)/gi.exec(lineStripped)
-        if (zMatch) {
-          let val = parseFloat(zMatch[1]);
-          target.z = abs ? val : pt.z + val;
-          hasMove = true;
-        }
-
-        if (hasMove) {
-          pt = { ...target };
-        }
-
-        // 3. Compensation Logic
-
-        // Always pass through non-motion commands or specific exclusions
-        // G10 (offsets), G92 (offsets), G4 (dwell), G53 (machine coord), G54-59 (wcs), M-codes
-        if (/(G10|G92|G4|G53|G5[4-9]|M\d+)/i.test(lineStripped)) {
-          result.push(line); // Preserve original formatting
-          // Update p0 if we moved (e.g. G53 G0 X0) - strictly speaking G53 is machine coords, 
-          // and our tracking is somewhat WCS relative. 
-          // But for safety, if we aren't tracking WCS vs Machine, we might just assume sync.
-          // But usually G53 is transit.
-          // For G92, it resets coordinates, so our 'pt' tracking handles the 'new position' 
-          // (which is actually just an offset shift, but 'pt' tracks effective WCS pos).
-          // Syncing p0 is safer.
-          if (hasMove) {
-            p0 = { ...pt };
-            p0_initialized = true;
+        try {
+          if (lc % 1000 === 0) {
+            console.log(`progress info ... line: ${lc}/${lines.length}`);
+            this.sckw.sendMessage(`(AL: progress ...  ${lc}/${lines.length})`)
           }
-          return;
-        }
+          lc++;
 
-        // If it's a motion command (or implicit motion)
-        if (modalMotion === 'G0' || modalMotion === 'G1') {
-          // Check if it's actually a move command (has coordinates)
+          if (line.match(/^\s*\([^\)]*\)\s*$/g)) {
+            result.push(line.trim());
+            return;
+          }
+
+          let lineStripped = this.stripComments(line)
+          if (!lineStripped) {
+            result.push(line);
+            return;
+          }
+
+          // 1. Detect State Changes (Modal)
+          if (/G91/i.test(lineStripped)) abs = false
+          if (/G90/i.test(lineStripped)) abs = true
+          if (/G20/i.test(lineStripped)) units = Units.INCHES
+          if (/G21/i.test(lineStripped)) units = Units.MILLIMETERS
+          if (/G17/i.test(lineStripped)) plane = PLANE_XY
+          if (/G18/i.test(lineStripped)) plane = PLANE_XZ
+          if (/G19/i.test(lineStripped)) plane = PLANE_YZ
+
+          // Detect Group 1 Motion Modes
+          let motionMatch = /(G0?[0123](?![0-9])|G38\.\d|G80)/i.exec(lineStripped);
+          if (motionMatch) {
+            let m = motionMatch[1].toUpperCase().replace(/^G0(\d)/, 'G$1');
+            modalMotion = m;
+          }
+
+          // 2. Update Virtual Position (pt)
+          let hasMove = false;
+          let target = { ...pt };
+
+          let xMatch = /X([\.\+\-\d]+)/gi.exec(lineStripped)
+          if (xMatch) {
+            let val = parseFloat(xMatch[1]);
+            target.x = abs ? val : pt.x + val;
+            hasMove = true;
+          }
+
+          let yMatch = /Y([\.\+\-\d]+)/gi.exec(lineStripped)
+          if (yMatch) {
+            let val = parseFloat(yMatch[1]);
+            target.y = abs ? val : pt.y + val;
+            hasMove = true;
+          }
+
+          let zMatch = /Z([\.\+\-\d]+)/gi.exec(lineStripped)
+          if (zMatch) {
+            let val = parseFloat(zMatch[1]);
+            target.z = abs ? val : pt.z + val;
+            hasMove = true;
+          }
+
           if (hasMove) {
-            if (abs) {
-              let baseCommand = lineStripped.replace(/([XYZ])([\.\+\-\d]+)/gi, '').trim();
+            if (/G53/i.test(lineStripped)) {
+              if (xMatch) target.x = undefined;
+              if (yMatch) target.y = undefined;
+              if (zMatch) target.z = undefined;
+            }
+            pt = { ...target };
+          }
 
-              // Handle segments
-              let segs = [];
-              if (p0_initialized) {
-                segs = this.splitToSegments(p0, pt, units);
-              }
+          // 3. Compensation Logic
 
-              // If no movement (0 length or just F command), ensuring it is preserved
-              if (segs.length === 0) {
-                let cpt = this.compensateZCoord(pt, units)
-                let newLine = `${baseCommand} X${cpt.x.toFixed(3)} Y${cpt.y.toFixed(3)} Z${cpt.z.toFixed(3)}`
-                newLine += ` ; Z${pt.z.toFixed(3)}`
-                result.push(newLine.trim())
-                p0_initialized = true
-              } else {
-                for (let seg of segs) {
-                  let cpt = this.compensateZCoord(seg, units)
-                  let newLine = `${baseCommand} X${cpt.x.toFixed(3)} Y${cpt.y.toFixed(3)} Z${cpt.z.toFixed(3)}`
-                  newLine += ` ; Z${seg.z.toFixed(3)}`
-                  result.push(newLine.trim())
+          // Always pass through non-motion commands
+          if (/(G10|G92|G4|G53|G5[4-9]|M\d+)/i.test(lineStripped)) {
+            result.push(line);
+            if (hasMove) {
+              p0 = { ...pt };
+              p0_initialized = true;
+            }
+            return;
+          }
+
+          // If it's a motion command (or implicit motion)
+          if (modalMotion === 'G0' || modalMotion === 'G1') {
+            if (hasMove) {
+              if (abs) {
+                let fMatch = /F([\.\+\-\d]+)/gi.exec(lineStripped);
+                let feedratePart = fMatch ? ` ${fMatch[0]}` : '';
+
+                let baseCommand = lineStripped.replace(/([XYZF])([\.\+\-\d]+)/gi, '').trim();
+                if (baseCommand.length === 0) {
+                  baseCommand = modalMotion;
                 }
+
+                let segs = [];
+                if (p0_initialized) {
+                  segs = this.splitToSegments(p0, pt, units);
+                }
+
+                if (segs.length === 0) {
+                  let cpt = this.compensateZCoord(pt, units)
+                  let zPart = (typeof cpt.z === 'number') ? ` Z${cpt.z.toFixed(3)}` : '';
+                  let newLine = `${baseCommand} X${cpt.x.toFixed(3)} Y${cpt.y.toFixed(3)}${zPart}${feedratePart}`
+                  if (typeof pt.z === 'number') {
+                    newLine += ` ; Z${pt.z.toFixed(3)}`
+                  }
+                  result.push(newLine.trim())
+                  p0_initialized = true
+                } else {
+                  let firstSeg = true;
+                  for (let seg of segs) {
+                    let cpt = this.compensateZCoord(seg, units)
+                    let zPart = (typeof cpt.z === 'number') ? ` Z${cpt.z.toFixed(3)}` : '';
+                    let newLine = `${baseCommand} X${cpt.x.toFixed(3)} Y${cpt.y.toFixed(3)}${zPart}`
+
+                    if (firstSeg) {
+                      newLine += feedratePart;
+                      firstSeg = false;
+                    }
+
+                    if (typeof seg.z === 'number') {
+                      newLine += ` ; Z${seg.z.toFixed(3)}`
+                    }
+                    result.push(newLine.trim())
+                  }
+                }
+                p0 = { ...pt };
+                p0_initialized = true;
+
+              } else {
+                result.push(line);
+                console.log('WARNING: G91 (Relative) move passed through uncompensated.');
+                p0 = { ...pt };
+                p0_initialized = true;
               }
-
-              // Sync p0
-              p0 = { ...pt };
-              p0_initialized = true;
-
             } else {
-              // Relative G0/G1 - pass through
-              result.push(line); // Preserve formatting
-              console.log('WARNING: G91 (Relative) move passed through uncompensated.');
-              // We must update p0 to stay in sync, assuming we are tracking relative moves correctly 
-              // But 'pt' handles relative logic above in step 2.
-              p0 = { ...pt };
-              p0_initialized = true;
-            }
-          } else {
-            // No XYZ move, e.g. "G1 F100" or just "G1"
-            result.push(line);
-          }
-        } else if (modalMotion === 'G2' || modalMotion === 'G3') {
-          // Handle Arcs Interploation
-          if (hasMove) {
-            // Extract Arc Parameters
-            let args = {};
-            let iMatch = /I([\.\+\-\d]+)/gi.exec(lineStripped);
-            if (iMatch) args.I = parseFloat(iMatch[1]);
-
-            let jMatch = /J([\.\+\-\d]+)/gi.exec(lineStripped);
-            if (jMatch) args.J = parseFloat(jMatch[1]);
-
-            let rMatch = /R([\.\+\-\d]+)/gi.exec(lineStripped);
-            if (rMatch) args.R = parseFloat(rMatch[1]);
-
-            // p0 is start, pt is end
-            if (p0_initialized) {
-              let points = this.interpolateArc(p0, pt, args, (modalMotion === 'G2'), units);
-
-              // Output Linear segments (G1)
-              for (let ap of points) {
-                let cpt = this.compensateZCoord(ap, units);
-                // Force G1 for arc segments
-                let newLine = `G1 X${cpt.x.toFixed(3)} Y${cpt.y.toFixed(3)} Z${cpt.z.toFixed(3)}`;
-                newLine += ` ; ${modalMotion} Z${ap.z.toFixed(3)}`;
-                result.push(newLine.trim());
-              }
-
-              p0 = { ...pt };
-              p0_initialized = true;
-
-            } else {
-              // Cannot interpolation without start point
-              console.log('WARNING: Arc without valid start point. Passing through.');
               result.push(line);
-              p0 = { ...pt };
-              p0_initialized = true;
+            }
+          } else if (modalMotion === 'G2' || modalMotion === 'G3') {
+            if (hasMove) {
+              let args = {};
+              let iMatch = /I([\.\+\-\d]+)/gi.exec(lineStripped);
+              if (iMatch) args.I = parseFloat(iMatch[1]);
+
+              let jMatch = /J([\.\+\-\d]+)/gi.exec(lineStripped);
+              if (jMatch) args.J = parseFloat(jMatch[1]);
+
+              let kMatch = /K([\.\+\-\d]+)/gi.exec(lineStripped);
+              if (kMatch) args.K = parseFloat(kMatch[1]);
+
+              let rMatch = /R([\.\+\-\d]+)/gi.exec(lineStripped);
+              if (rMatch) args.R = parseFloat(rMatch[1]);
+
+              let pMatch = /P([\.\+\-\d]+)/gi.exec(lineStripped);
+              if (pMatch) args.P = parseFloat(pMatch[1]);
+
+              let attributes = lineStripped.replace(new RegExp(modalMotion, 'i'), '');
+              attributes = attributes.replace(/([XYZIJKRP])([\.\+\-\d]+)/gi, '').trim();
+
+              if (p0_initialized) {
+                let points = this.interpolateArc(p0, pt, args, (modalMotion === 'G2'), units, plane);
+
+                let firstSegment = true;
+                for (let ap of points) {
+                  let cpt = this.compensateZCoord(ap, units);
+                  let zPart = (typeof cpt.z === 'number') ? ` Z${cpt.z.toFixed(3)}` : '';
+                  let newLine = `G1 X${cpt.x.toFixed(3)} Y${cpt.y.toFixed(3)}${zPart}`;
+
+                  if (firstSegment && attributes.length > 0) {
+                    newLine += ` ${attributes}`;
+                    firstSegment = false;
+                  }
+
+                  if (typeof ap.z === 'number') {
+                    newLine += ` ; ${modalMotion} Z${ap.z.toFixed(3)}`;
+                  } else {
+                    newLine += ` ; ${modalMotion}`;
+                  }
+                  result.push(newLine.trim());
+                }
+
+                p0 = { ...pt };
+                p0_initialized = true;
+
+              } else {
+                console.log('WARNING: Arc without valid start point. Passing through.');
+                result.push(line);
+                p0 = { ...pt };
+                p0_initialized = true;
+              }
+            } else {
+              result.push(line);
             }
           } else {
             result.push(line);
+            if (modalMotion.startsWith('G38')) {
+              p0_initialized = false;
+            }
           }
-        } else {
-          // G38, G80, etc. - PASS THROUGH
-          result.push(line);
-
-          if (modalMotion.startsWith('G38')) {
-            p0_initialized = false; // Lost position validity after probe usually
-          } else {
-            // Unknown motion?
-          }
+        } catch (lineErr) {
+          console.error(`Error processing line ${lc}: ${line}`, lineErr);
+          throw lineErr;
         }
-
       })
 
       const newgcodeFileName = alFileNamePrefix + this.gcodeFileName;
@@ -955,9 +1128,61 @@ module.exports = class Autolevel {
       this.sckw.sendGcode(`(AL: finished)`)
     } catch (x) {
       console.error(x);
-      this.sckw.sendGcode(`(AL: error occurred ${x})`)
-      console.log(`error occurred ${x}`)
+      let errorMsg = x.message;
+      if (typeof lc !== 'undefined') {
+        errorMsg = `Line ${lc}: ${errorMsg}`;
+      }
+      this.sckw.sendGcode(`(AL: error occurred ${errorMsg})`)
+      console.log(`error occurred ${x.stack}`)
     }
     console.log('Leveling applied')
+  }
+
+  compensateZCoord(pt_in_or_mm, input_units) {
+    if (!pt_in_or_mm) {
+      throw new Error("compensateZCoord: Input point is null or undefined");
+    }
+
+    let pt_mm = {
+      x: (typeof pt_in_or_mm.x === 'number') ? Units.convert(pt_in_or_mm.x, input_units, Units.MILLIMETERS) : undefined,
+      y: (typeof pt_in_or_mm.y === 'number') ? Units.convert(pt_in_or_mm.y, input_units, Units.MILLIMETERS) : undefined,
+      z: (typeof pt_in_or_mm.z === 'number') ? Units.convert(pt_in_or_mm.z, input_units, Units.MILLIMETERS) : undefined
+    }
+
+    if (typeof pt_mm.x !== 'number' || typeof pt_mm.y !== 'number') {
+      return {
+        x: pt_in_or_mm.x,
+        y: pt_in_or_mm.y,
+        z: pt_in_or_mm.z
+      };
+    }
+
+    if (Math.abs(this.skewAngle) > 1e-6) {
+      const cos = Math.cos(this.skewAngle);
+      const sin = Math.sin(this.skewAngle);
+      const rx = pt_mm.x * cos - pt_mm.y * sin;
+      const ry = pt_mm.x * sin + pt_mm.y * cos;
+      pt_mm.x = rx;
+      pt_mm.y = ry;
+    }
+
+    let planeZ = 0;
+    if (this.mesh) {
+      try {
+        planeZ = this.mesh.interpolateZ(pt_mm.x, pt_mm.y);
+        planeZ -= (this.meshZeroOffset || 0);
+      } catch (err) {
+        console.error(`Mesh interpolation error at X${pt_mm.x} Y${pt_mm.y}:`, err);
+        planeZ = 0;
+      }
+    }
+
+    let newZ = (typeof pt_mm.z === 'number') ? pt_mm.z + planeZ : undefined;
+
+    return {
+      x: Units.convert(pt_mm.x, Units.MILLIMETERS, input_units),
+      y: Units.convert(pt_mm.y, Units.MILLIMETERS, input_units),
+      z: (typeof newZ === 'number') ? Units.convert(newZ, Units.MILLIMETERS, input_units) : undefined
+    }
   }
 }

@@ -1,99 +1,400 @@
 (function () {
-    const { $ } = window;
-    const { Cookies } = window;
+    // --- CONTROLLER LOGIC ---
+    let socket = null;
+    let controllerPort = '';
+    let token = '';
 
-    // Widget State
-    let settings = {
-        feedrate: 50,
-        height: 2,
-        margin: 2.5,
-        grid: 3
-    };
-
-    let probePoints = [];
-    let minZ = Infinity;
-    let maxZ = -Infinity;
-
-    // Elements
-    const elFeedrate = document.getElementById('feedrate');
+    // DOM Elements
+    // DOM Elements
+    // const elPortSelector = document.getElementById('port-selector'); // Removed
+    // const elPortSelector = document.getElementById('port-selector'); // Removed
+    // const elFeedrate = document.getElementById('feedrate'); // Removed, using feedSlow
     const elHeight = document.getElementById('height');
     const elMargin = document.getElementById('margin');
     const elGrid = document.getElementById('grid');
     const btnAutolevel = document.getElementById('btn-autolevel');
     const btnReapply = document.getElementById('btn-reapply');
     const canvas = document.getElementById('mesh-canvas');
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas ? canvas.getContext('2d') : null;
     const statusText = document.getElementById('status-text');
+    const inputs = [elHeight, elMargin, elGrid];
 
-    // Load Settings from Cookies or Defaults
-    // (Optional implementation, skipping for simplicity)
+    // Widget State
+    const defaultSettings = {
+        // Autolevel
+        height: 2,
+        margin: 2.5,
+        grid: 3,
+        // Probing
+        probeDia: 6.00,
+        sizeX: 50,
+        sizeY: 50,
+        probeDeflection: 0.36,
+        retract: 5,
+        maxTravel: 25,
+        safeZ: 20,
+        feedSlow: 50,
+        feedFast: 200,
+        plateThickness: 15,
+        plateThickness: 15,
+        probeSpacing: 50,
+        probeDepth: 5,
+        // UI State
+        activeTab: 'autolevel'
+    };
 
-    // Event Listeners
-    btnAutolevel.addEventListener('click', () => {
-        const f = elFeedrate.value;
-        const h = elHeight.value;
-        const m = elMargin.value;
+    let settings = { ...defaultSettings };
 
-        // Grid size is special, let's pass it if > 0
-        const grid = elGrid.value;
+    // Helper for on-screen logging
+    function logDebug(msg) {
+        const debugConsole = document.getElementById('debug-console');
+        if (debugConsole) {
+            const div = document.createElement('div');
+            div.textContent = msg;
+            debugConsole.appendChild(div);
+            debugConsole.scrollTop = debugConsole.scrollHeight;
+        }
+        console.log(msg);
+    }
 
-        // Construct Command
-        // #autolevel F50 H2 M2.5 GRID3
-        // Note: autolevel.js looks for X and Y in command?
-        // Wait, autolevel.js:
-        // let xs = /X([\.\+\-\d]+)/gi.exec(cmd)
-        // if (xs) xSize = parseFloat(xs[1])
-        // If X/Y not provided, it attempts to use gcodeBounds or context.
-        // The user request didn't mention X/Y fields, so we assume G-code bounds or context.
+    function loadSettings() {
+        console.log("loadSettings() called - Requesting from server...");
+        // Request settings from server
+        // Wait for connection? 
+        // If we call this on load, socket might not be ready. 
+        // We really should call this in the socket 'connect' or 'serialport:open' event.
+        // For now, let's just emit if we can, or rely on the connection flow to trigger it.
+        // See 'connectSocket' -> 'serialport:list' -> 'serialport:open'.
+        // We will trigger the fetch in 'serialport:open'
 
-        let cmd = `#autolevel F${f} H${h} M${m}`;
-        if (grid) {
-            cmd += ` GRID${grid}`;
+        // Also load local UI state that we don't want to persist globally if desired?
+        // For now, per user request, ALL settings including UI state (active tab) are going to the file.
+    }
+
+    function applySettings(newSettings) {
+        console.log("Applying Settings:", newSettings);
+        settings = { ...defaultSettings, ...newSettings };
+
+        // Restore Input Values
+        const mapping = {
+            'height': settings.height,
+            'margin': settings.margin,
+            'grid': settings.grid,
+            'probeDia': settings.probeDia,
+            'sizeX': settings.sizeX,
+            'sizeY': settings.sizeY,
+            'probeDeflection': settings.probeDeflection,
+            'retract': settings.retract,
+            'maxTravel': settings.maxTravel,
+            'safeZ': settings.safeZ,
+            'feedSlow': settings.feedSlow,
+            'feedFast': settings.feedFast,
+            'plateThickness': settings.plateThickness,
+            'probeSpacing': settings.probeSpacing
+        };
+
+        for (const [id, val] of Object.entries(mapping)) {
+            const el = document.getElementById(id);
+            if (el) el.value = val;
         }
 
-        console.log('Sending Autolevel Command:', cmd);
-        sendGcode(cmd);
+        // Restore Active Tab
+        if (settings.activeTab) {
+            window.switchMainTab(settings.activeTab);
+        }
 
-        // Reset Visualizer
-        resetVisualizer();
-        statusText.innerText = "Autolevel started...";
-    });
+        // Restore Global Settings Panel State
+        // This relies on localStorage still as it's purely local UI preference?
+        // Or should this be in the file too? 
+        // User asked for "settings" to be persistent. Panel state is arguably "preference".
+        // Let's keep panel state local for now as it's not critical.
+        const globalSettingsOpen = localStorage.getItem('global_widget_settings_open') === 'true';
+        if (globalSettingsOpen) {
+            const panel = document.getElementById('globalSettings');
+            const btn = document.getElementById('btnGlobalSettings');
+            if (panel) panel.style.display = 'block';
+            if (btn) btn.classList.add('active');
+        }
 
-    btnReapply.addEventListener('click', () => {
-        console.log('Sending Reapply Command');
-        sendGcode('#autolevel_reapply');
-        statusText.innerText = "Reapplying mesh...";
-    });
+        validateInputs();
+        updateButtonState(socket && controllerPort);
+    }
 
-    // CNCJS Communication
-    // We expect 'cnc' object to be available in the global scope (standard widget)
-    // or we might need to use standard socket events.
+    function saveSettings() {
+        // Capture Input Values
+        const ids = [
+            'height', 'margin', 'grid',
+            'probeDia', 'sizeX', 'sizeY', 'probeDeflection',
+            'retract', 'maxTravel', 'safeZ',
+            'feedSlow', 'feedFast', 'plateThickness', 'probeSpacing', 'probeDepth'
+        ];
 
-    // Helper to send GCode
+        ids.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) settings[id] = parseFloat(el.value);
+        });
+
+        console.log("Saving settings to server:", settings);
+        // Send to server
+        sendGcode(`(autolevel_save_settings ${JSON.stringify(settings)})`);
+    }
+
+    function validateInputs() {
+        let isValid = true;
+        const setError = (id, valid) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (!valid) {
+                el.classList.add('is-invalid');
+                isValid = false;
+            } else {
+                el.classList.remove('is-invalid');
+            }
+        };
+
+        // Autolevel Settings
+        const grid = parseInt(document.getElementById('grid').value, 10);
+        setError('grid', !isNaN(grid) && grid >= 2);
+
+        const h = parseFloat(document.getElementById('height').value);
+        setError('height', !isNaN(h)); // Height can be negative (Z-down) or positive depending on setup, but likely just a travel height so usually > 0. Let's assume number is enough. Actually, travel height is usually positive absolute.
+        // Let's enforce basics:
+        // Height: usually positive safe height? Or relative? 
+        // Existing default is 2. Let's just check !isNaN.
+
+        setError('margin', !isNaN(parseFloat(document.getElementById('margin').value)));
+
+        // Probing Settings
+        const positiveFields = ['probeDia', 'sizeX', 'sizeY', 'probeDeflection', 'retract', 'maxTravel', 'safeZ', 'feedSlow', 'feedFast', 'plateThickness', 'probeSpacing', 'probeDepth'];
+        positiveFields.forEach(id => {
+            const val = parseFloat(document.getElementById(id).value);
+            // Some can be 0? Deflection maybe.
+            // Feed must be > 0.
+            if (id.includes('feed')) {
+                setError(id, !isNaN(val) && val > 0);
+            } else {
+                setError(id, !isNaN(val) && val >= 0);
+            }
+        });
+
+        return isValid;
+    }
+
+    function updateButtonState(connected) {
+        // First check internal validation
+        const inputsValid = validateInputs();
+        const disabled = !connected || !inputsValid;
+
+        if (btnAutolevel) btnAutolevel.disabled = disabled;
+        if (btnAutolevel) {
+            btnAutolevel.title = !connected ? "Connect to controller first" : (!inputsValid ? "Check invalid settings" : "");
+        }
+
+        if (btnReapply) btnReapply.disabled = disabled; // Reapply might not need all inputs, but good practice.
+
+        const btnSkew = document.getElementById('btn-measure-skew');
+        if (btnSkew) btnSkew.disabled = disabled;
+
+        // Probing buttons
+        const probeButtons = document.querySelectorAll('.probe-grid button');
+        probeButtons.forEach(btn => {
+            btn.disabled = disabled;
+        });
+    }
+
+
+    let probePoints = [];
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+
+    // Skew State
+    let skewState = {
+        active: false,
+        step: 0,
+        probeCount: 0,
+        p1: null,
+        p2: null,
+        spacing: 50 // Default spacing
+    };
+
+    // Autolevel State
+    let autolevelState = {
+        active: false
+    };
+
+    // Connect to CNCjs via Socket.IO
+    function connectSocket() {
+        console.log('Attempting to connect...');
+
+        token = localStorage.getItem('cncjs.accessToken');
+        if (!token) {
+            const urlParams = new URLSearchParams(window.location.search);
+            token = urlParams.get('token');
+        }
+
+        if (!token) {
+            console.error('ERROR: Access Token not found!');
+            return;
+        }
+
+        console.log('Token found. connecting to socket...');
+
+        if (typeof window.io === 'undefined') {
+            console.error('ERROR: window.io is undefined');
+            return;
+        }
+
+        socket = window.io.connect('', {
+            query: 'token=' + token
+        });
+
+        socket.on('connect', () => {
+            console.log('SOCKET: Connected!');
+            socket.emit('serialport:list');
+            socket.emit('list');
+        });
+
+        socket.on('error', (err) => {
+            console.error('SOCKET ERROR: ' + err);
+        });
+
+        socket.on('connect_error', (err) => {
+            console.error('SOCKET CONNECT_ERROR: ' + err);
+        });
+
+        socket.on('close', () => {
+            console.log('SOCKET: Closed');
+        });
+
+        socket.on('serialport:list', function (ports) {
+            console.log('PORTS: Received list (' + ports.length + ')');
+            const connectedPort = ports.find(p => p.inuse || p.isOpen);
+            if (connectedPort) {
+                controllerPort = connectedPort.comName || connectedPort.port;
+                console.log('SELECTED PORT: ' + controllerPort);
+
+                // Explicitly open/subscribe to the port to receive events
+                console.log('Subscribing to port...');
+                socket.emit('open', controllerPort);
+
+                updateButtonState(true);
+                // setTimeout(() => sendGcode('(autolevel_get_mesh)'), 500); // Removed to prevent duplicate call (handled in serialport:open)
+            } else {
+                console.log('NO ACTIVE PORT FOUND.');
+            }
+        });
+
+        socket.on('serialport:open', function (options) {
+            console.log('PORT OPEN: ' + options.port);
+            controllerPort = options.port;
+            updateButtonState(true);
+            setTimeout(() => {
+                sendGcode('(autolevel_get_mesh)');
+                // Fetch settings when port opens
+                sendGcode('(autolevel_fetch_settings)');
+                // Fetch current skew
+                sendGcode('(autolevel_skew)');
+            }, 500);
+        });
+
+        socket.on('serialport:close', function (options) {
+            console.log('PORT CLOSED');
+            controllerPort = '';
+            updateButtonState(false);
+        });
+
+        socket.on('serialport:write', (data) => {
+            // console.log('WRITE: ' + JSON.stringify(data));
+            onSerialData(data);
+        });
+
+        socket.on('serialport:read', (data) => {
+            // console.log('READ: ' + JSON.stringify(data));
+            onSerialData(data);
+        });
+    }
+
     function sendGcode(cmd) {
-        if (window.cnc && window.cnc.controller) {
-            window.cnc.controller.command('gcode', cmd);
+        if (socket && controllerPort) {
+            // CNCjs 1.9.x API: socket.emit('command', port, type, data)
+            socket.emit('command', controllerPort, 'gcode', cmd);
+            console.log("Sent GCode via Socket.IO:", cmd);
         } else {
-            console.warn('CNC Controller not found, printing command:', cmd);
-            // Fallback for testing/dev
+            console.warn("Cannot send GCode: Socket or Port not ready.", { socket: !!socket, port: controllerPort });
+
+            // Fallback: Try postMessage for older CNCjs versions or specialized setups
+            if (token) {
+                window.parent.postMessage({
+                    token: token,
+                    action: {
+                        type: 'command',
+                        payload: {
+                            command: 'gcode',
+                            args: cmd
+                        }
+                    }
+                }, '*');
+            }
         }
     }
 
-    // Listener for incoming data to visualize
-    // We need to hook into the socket or CNCJS events.
-    // window.cnc.on('serialport:write', ...) usually isn't exposed directly to widgets like this
-    // unless the widget is part of the system.
-    // However, if we are a Custom Widget in CNCJS, we can access the socket.
 
+    // Event Listeners
+    // Event Listeners
+    btnAutolevel.addEventListener('click', () => {
+        const f = document.getElementById('feedSlow') ? document.getElementById('feedSlow').value : 50;
+        const h = elHeight.value || settings.height;
+        const m = elMargin.value || settings.margin;
+        const grid = elGrid.value;
+
+        // P1 = Probe Only (Do not apply automatically)
+        let cmd = `(autolevel F${f} H${h} M${m} P1`;
+        if (grid) {
+            cmd += ` GRID${grid}`;
+        }
+        cmd += ')';
+
+        // Set flag to expect completion
+        autolevelState.active = true;
+
+        modalManager.confirmProbe(cmd, 'autolevel-confirm', 'Initiate Surface Map');
+    });
+
+    btnReapply.addEventListener('click', () => {
+        modalManager.confirmProbe('(autolevel_reapply)', 'reapply-confirm', 'Reapply Compensation');
+    });
+
+    // Data Handling
     function onSerialData(data) {
-        // We look for (AL: PROBED x y z)
-        // Regex: \(AL: PROBED ([\.\+\-\d]+) ([\.\+\-\d]+) ([\.\+\-\d]+)\)
+        // Handle incoming string or object
+        let str = data;
+        if (typeof data === 'object' && data !== null && data.data) {
+            str = data.data;
+        }
 
-        // Handle incoming string (could be line or chunk)
-        if (typeof data === 'string') {
-            const lines = data.split('\n');
+        if (typeof str === 'string') {
+            const lines = str.split('\n');
             lines.forEach(line => {
-                const match = /\(AL: PROBED ([\.\+\-\d]+) ([\.\+\-\d]+) ([\.\+\-\d]+)\)/.exec(line);
+                const cleanLine = line.trim();
+                // Check if it looks like an AL command
+                if (cleanLine.includes('(AL:')) {
+                    // console.log('AL CMD Found: ' + cleanLine);
+                }
+
+                // Check for settings response
+                if (cleanLine.startsWith('(AL: SETTINGS')) {
+                    const jsonStr = cleanLine.substring(13, cleanLine.length - 1).trim();
+                    try {
+                        const newSettings = JSON.parse(jsonStr);
+                        applySettings(newSettings);
+                    } catch (e) {
+                        console.error("Failed to parse settings from server:", e);
+                    }
+                    return; // Done with this line
+                }
+
+                // Check for single probe points (legacy or live probing)
+                const match = /\(AL: PROBED ([\.\+\-\d]+) ([\.\+\-\d]+) ([\.\+\-\d]+)\)/.exec(cleanLine);
                 if (match) {
                     const x = parseFloat(match[1]);
                     const y = parseFloat(match[2]);
@@ -101,117 +402,573 @@
                     addProbePoint(x, y, z);
                 }
 
-                // Also check for completion
-                if (line.includes('(AL: finished)') || line.includes('(AL: dz_avg=')) {
+                // Check for packed probe points (AL: D x,y,z x,y,z ...)
+                if (cleanLine.startsWith('(AL: D')) {
+                    const content = cleanLine.substring(6, cleanLine.length - 1).trim(); // Remove "(AL: D" and ")"
+                    if (content) {
+                        const points = content.split(' ');
+                        points.forEach(ptStr => {
+                            const parts = ptStr.split(',');
+                            if (parts.length === 3) {
+                                const x = parseFloat(parts[0]);
+                                const y = parseFloat(parts[1]);
+                                const z = parseFloat(parts[2]);
+                                if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
+                                    addProbePoint(x, y, z);
+                                }
+                            }
+                        });
+                    }
+                }
+
+                // Check for status updates
+                if (cleanLine.includes('(AL: dumping mesh start)')) {
+                    resetVisualizer();
+                    statusText.innerText = "Receiving mesh data...";
+                    statusText.innerText = "Receiving mesh data...";
+                } else if (cleanLine.includes('(AL: finished)') || cleanLine.includes('(AL: dz_avg=')) {
                     statusText.innerText = "Autolevel complete.";
                     drawMesh();
+
+                    if (autolevelState.active) {
+                        autolevelState.active = false;
+                        // Trigger confirmation to apply
+                        // The command to run on confirm is (autolevel_reapply)
+                        modalManager.confirmProbe('(autolevel_reapply)', 'apply-mesh-confirm', 'Apply Compensation');
+                    }
+
+                } else if (cleanLine.includes('(AL: applying')) {
+                    statusText.innerText = "Applying mesh compensation...";
+                } else if (cleanLine.includes('(AL: progress')) {
+                    statusText.innerText = cleanLine.replace(/^\(AL:\s*/, '').replace(/\)\s*$/, '');
+                } else if (cleanLine.includes('(AL: no mesh data')) {
+                    statusText.innerText = "No mesh data found on server.";
+                } else if (cleanLine.includes('PRB:')) {
+                    // Check if we are in Skew mode
+                    if (skewState.active) {
+                        processSkewProbe(cleanLine);
+                    }
+                } else if (cleanLine.includes('AL: Skew angle set to') || cleanLine.includes('AL: Current Skew:')) {
+                    // Parse: (AL: Skew angle set to 1.234 deg) or (AL: Current Skew: 1.234 deg)
+                    const m = /([\.\+\-\d]+)\s*deg/.exec(cleanLine);
+                    if (m) {
+                        const val = parseFloat(m[1]);
+                        updateSkewDisplay(val);
+                    }
                 }
             });
         }
     }
 
-    // Setup Socket Listener
-    // Note: implementation depends on CNCJS version.
-    // Try to attach to global socket if available.
-    // This is "best effort" for a generic CNCJS widget.
-    const socket = window.cnc ? window.cnc.socket : null;
-    if (socket) {
-        // Using 'serialport:write' because we (the extension) write the comment to the serial port channel?
-        // Actually, autolevel.js calls this.sckw.sendGcode(...) which emits 'command'.
-        // The CNCJS server *writes* this to the port.
-        // The 'serialport:write' event is emitted when data is written to the port.
-        // So we should see it there.
-        socket.on('serialport:write', (data) => {
-            // data might be raw buffer or string
-            onSerialData(data.toString());
-        });
-
-        // Also listen to serialport:read just in case we change strategy or for debugging
-        // socket.on('serialport:read', (data) => onSerialData(data.toString()));
-    } else {
-        console.warn('CNC Socket not found.');
+    function updateSkewDisplay(angle) {
+        const el = document.getElementById('skew-status');
+        const valEl = document.getElementById('skew-val');
+        if (el && valEl) {
+            valEl.innerText = angle.toFixed(3);
+            if (Math.abs(angle) > 0.0001) {
+                el.style.display = 'block';
+            } else {
+                // el.style.display = 'none'; // Optional: hide if 0? Or always show to indicate feature exists?
+                el.style.display = 'block'; // Always show
+            }
+        }
     }
 
+    function startSkewProbe(spacing) {
+        skewState.active = true;
+        skewState.step = 1;
+        skewState.probeCount = 0;
+        skewState.spacing = spacing;
+        skewState.p1 = null;
+        skewState.p2 = null;
 
-    // Visualizer Logic
+        console.log("Starting Skew Probe. Spacing:", spacing);
+        const params = getProbeParams();
+
+        // Step 1: Probe Y Front
+        // Move to start? Assumed current pos is start.
+        // Just probe Y.
+
+        // P1 Probe G-Code
+        let g = "G91\n";
+        g += `G38.2 Y${params.maxTravel} F${params.fast}\n`;
+        g += `G0 Y-${params.ret}\n`;
+        g += `G38.2 Y${params.ret + 1} F${params.slow}\n`;
+        g += `G0 Y-${params.ret}\n`;
+        g += "G90";
+
+        sendGcode(g);
+        statusText.innerText = "Skew: Probing Point 1...";
+    }
+
+    function processSkewProbe(line) {
+        // Parse PRB: x,y,z:val,val,val
+        // Example: [PRB:0.000,0.000,0.000:1]
+        const match = /\[PRB:([\.\+\-\d]+),([\.\+\-\d]+),([\.\+\-\d]+)/.exec(line);
+        if (!match) return;
+
+        const x = parseFloat(match[1]);
+        const y = parseFloat(match[2]);
+        const z = parseFloat(match[3]);
+
+        // Increment probe count for current step
+        skewState.probeCount = (skewState.probeCount || 0) + 1;
+        console.log(`Skew Probe Step ${skewState.step}, Count ${skewState.probeCount}:`, { x, y, z });
+
+        if (skewState.step === 1) {
+            // Wait for 2nd probe (Slow probe)
+            if (skewState.probeCount < 2) {
+                return;
+            }
+
+            skewState.p1 = { x, y, z };
+            console.log("Skew P1 Recorded:", skewState.p1);
+
+            // Move to P2
+            skewState.step = 2;
+            skewState.probeCount = 0; // Reset for next point
+
+            const spacing = skewState.spacing;
+            const params = getProbeParams();
+
+            let g = "G91\n";
+            g += `G0 X${spacing}\n`; // Move X
+            g += "G90\n";
+
+            // Probe Y again
+            g += "G91\n";
+            g += `G38.2 Y${params.maxTravel} F${params.fast}\n`;
+            g += `G0 Y-${params.ret}\n`;
+            g += `G38.2 Y${params.ret + 1} F${params.slow}\n`;
+            g += `G0 Y-${params.ret}\n`;
+            g += "G90";
+
+            sendGcode(g);
+            statusText.innerText = "Skew: Moving to Point 2...";
+        }
+        else if (skewState.step === 2) {
+            // Wait for 2nd probe (Slow probe)
+            if (skewState.probeCount < 2) {
+                return;
+            }
+
+            skewState.p2 = { x, y, z };
+            console.log("Skew P2 Recorded:", skewState.p2);
+            skewState.active = false; // Done
+
+            calculateAndApplySkew();
+        }
+    }
+
+    function calculateAndApplySkew() {
+        const p1 = skewState.p1;
+        const p2 = skewState.p2;
+        const dx = p2.x - p1.x; // Should be roughly spacing
+        const dy = p2.y - p1.y;
+
+        // Angle = atan(dy/dx)
+        const angleRad = Math.atan2(dy, dx);
+        const angleDeg = angleRad * 180 / Math.PI;
+
+        console.log(`Skew Result: dy=${dy}, dx=${dx}, angle=${angleDeg.toFixed(4)}`);
+
+        console.log(`Skew Result: dy=${dy}, dx=${dx}, angle=${angleDeg.toFixed(4)}`);
+
+        // Prepare data for modal
+        modalManager.setSkewResultData({
+            p1: p1,
+            p2: p2,
+            angle: angleDeg
+        });
+
+        const cmd = `(autolevel_skew A${angleDeg.toFixed(5)})`;
+        modalManager.confirmProbe(cmd, 'skew-result', 'Skew Measurement Result');
+    }
+    let graph3d = null;
+
     function resetVisualizer() {
+        console.log('Resetting visualizer');
         probePoints = [];
         minZ = Infinity;
         maxZ = -Infinity;
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (drawTimeout) {
+            clearTimeout(drawTimeout);
+            drawTimeout = null;
+        }
+        if (graph3d) {
+            // We can just clear data or redraw with empty
+            // drawMesh(); // Prevent "Graph data not initialized" error on empty data
+        }
     }
 
+    let drawTimeout = null;
     function addProbePoint(x, y, z) {
+        // console.log(`Adding probe point: ${x}, ${y}, ${z}`);
         probePoints.push({ x, y, z });
-        console.log('Point added:', x, y, z);
 
         if (z < minZ) minZ = z;
         if (z > maxZ) maxZ = z;
 
-        drawMesh();
+        if (!drawTimeout) {
+            drawTimeout = setTimeout(() => {
+                drawMesh();
+                drawTimeout = null;
+            }, 200);
+        }
     }
 
     function drawMesh() {
-        if (probePoints.length === 0) return;
+        const container = document.getElementById('visualizer-container');
+        if (!container) return;
 
-        // Resize canvas to display
-        canvas.width = canvas.parentElement.clientWidth;
-        canvas.height = canvas.parentElement.clientHeight;
+        if (typeof vis === 'undefined') {
+            statusText.innerText = "Error: Visualizer library (vis.js) not loaded. Check internet connection.";
+            return;
+        }
 
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        try {
+            // Prepare data for vis.js
+            const data = new vis.DataSet();
+            probePoints.forEach(p => {
+                data.add({ x: p.x, y: p.y, z: p.z });
+            });
 
-        // Find bounds for scaling
-        let minX = Infinity, maxX = -Infinity;
-        let minY = Infinity, maxY = -Infinity;
+            const options = {
+                width: '100%',
+                height: '100%',
+                style: 'surface',
+                showPerspective: true,
+                showGrid: true,
+                showShadow: false,
+                keepAspectRatio: false,
+                verticalRatio: 0.2,
+                xLabel: 'X',
+                yLabel: 'Y',
+                zLabel: 'Z',
+                cameraPosition: {
+                    horizontal: 1.0,
+                    vertical: 0.5,
+                    distance: 1.5
+                },
+                tooltip: function (point) {
+                    return 'X: ' + point.x + '<br>Y: ' + point.y + '<br>Z: ' + point.z;
+                },
+                // Heatmap Settings
+                showLegend: true,
+                legendLabel: 'Z-Height',
+                valueMin: minZ,
+                valueMax: maxZ,
+                // Optional: Customize colors if needed, default is usually a heat gradient
+            };
 
-        probePoints.forEach(p => {
-            if (p.x < minX) minX = p.x;
-            if (p.x > maxX) maxX = p.x;
-            if (p.y < minY) minY = p.y;
-            if (p.y > maxY) maxY = p.y;
-        });
+            if (!graph3d) {
+                graph3d = new vis.Graph3d(container, data, options);
+            } else {
+                graph3d.setOptions(options); // Update options for verticalRatio
+                graph3d.setData(data); // Efficiently update data
+                graph3d.redraw(); // Explicitly redraw
+            }
 
-        const padding = 20;
-        const w = canvas.width - 2 * padding;
-        const h = canvas.height - 2 * padding;
+            // Calculate metrics
+            const delta = maxZ - minZ;
+            const mean = probePoints.reduce((acc, p) => acc + p.z, 0) / probePoints.length;
+            const variance = probePoints.reduce((acc, p) => acc + Math.pow(p.z - mean, 2), 0) / probePoints.length;
+            const stdDev = Math.sqrt(variance);
 
-        const rangeX = maxX - minX || 0.1;
-        const rangeY = maxY - minY || 0.1;
-        const rangeZ = maxZ - minZ || 0.01; // Avoid divide by zero
-
-        // Scale to fit
-        const scaleX = w / rangeX;
-        const scaleY = h / rangeY;
-        // Keep aspect ratio? Maybe not necessary for simple visualizer
-
-        // Draw Points (colored by Z)
-        probePoints.forEach(p => {
-            const px = padding + (p.x - minX) * scaleX;
-            const py = canvas.height - (padding + (p.y - minY) * scaleY); // Flip Y for canvas
-
-            // Color mapping: Blue (Low) -> Red (High)
-            // Normalized Z (0 to 1)
-            let normZ = (p.z - minZ) / rangeZ;
-            if (isNaN(normZ)) normZ = 0.5;
-
-            const r = Math.floor(normZ * 255);
-            const b = 255 - r;
-
-            ctx.fillStyle = `rgb(${r}, 0, ${b})`;
-            ctx.beginPath();
-            ctx.arc(px, py, 4, 0, 2 * Math.PI);
-            ctx.fill();
-        });
-
-        statusText.innerText = `Points: ${probePoints.length} | Z Range: ${minZ.toFixed(3)} to ${maxZ.toFixed(3)}`;
+            statusText.innerText = `Points: ${probePoints.length} | Range: ${minZ.toFixed(3)} to ${maxZ.toFixed(3)} | Deviation: ${delta.toFixed(3)} | StdDev: ${stdDev.toFixed(3)}`;
+        } catch (err) {
+            console.error("Visualizer error:", err);
+            statusText.innerText = "Error initializing visualizer: " + err.message;
+        }
     }
 
-    window.addEventListener('load', () => {
-        // Give CNCJS a moment to initialize the controller connection if needed
-        setTimeout(() => {
-            console.log('Requesting initial mesh...');
-            sendGcode('#autolevel_get_mesh');
-        }, 1000);
+    // --- RESIZE OBSERVER ---
+    // Automatically redraw graph when container size changes
+    const resizeObserver = new ResizeObserver(entries => {
+        for (let entry of entries) {
+            if (graph3d && probePoints.length > 0) {
+                // Debounce slightly if needed, but vis.js handles redraws well.
+                // We specifically need redraw() to recalculate dimensions.
+                graph3d.redraw();
+            }
+        }
     });
+
+    // Start observing the container once the DOM is ready
+    const visContainer = document.getElementById('visualizer-container');
+    if (visContainer) {
+        resizeObserver.observe(visContainer);
+    }
+
+    // Initialize
+    window.addEventListener('load', () => {
+        loadSettings();
+        updateButtonState(false); // Start disabled until connected
+
+        // Attach listeners to all settings inputs
+        const settingsInputs = document.querySelectorAll('.settings-grid input');
+        settingsInputs.forEach(el => {
+            el.addEventListener('change', () => {
+                validateInputs(); // Validate immediately on change
+                saveSettings();
+                // We need to re-check connectivity state to know if we should enable
+                // But updateButtonState requires 'connected' arg.
+                // We can cache connection state or check socket.
+                const connected = (socket && controllerPort);
+                updateButtonState(connected);
+            });
+            // Also validate on input for immediate feedback
+            el.addEventListener('input', () => {
+                validateInputs();
+                const connected = (socket && controllerPort);
+                updateButtonState(connected);
+            });
+        });
+
+        // Give CNCJS a moment to initialize
+        // We can look for the token immediately or wait a tick
+        setTimeout(() => {
+            connectSocket();
+
+            // Optional: Request initial mesh if available
+            // sendGcode('#autolevel_get_mesh'); // Wait for port open
+        }, 500);
+    });
+
+    // --- PROBING WIDGET LOGIC ---
+
+    // Expose global functions for HTML onclick handlers
+    window.switchMainTab = function (tabName) {
+        console.log("switchMainTab called with:", tabName);
+        // Tabs
+        document.querySelectorAll('.main-tab').forEach(el => el.classList.remove('active'));
+
+        const btnId = 'tab-btn-' + tabName;
+        const activeTab = document.getElementById(btnId);
+        if (activeTab) {
+            activeTab.classList.add('active');
+        } else {
+            console.warn("switchMainTab: Button not found for ID:", btnId);
+        }
+
+        // Content
+        document.querySelectorAll('.main-tab-content').forEach(el => el.classList.remove('active'));
+        const content = document.getElementById('main-tab-' + tabName);
+        if (content) {
+            content.classList.add('active');
+            if (tabName === 'probing') {
+                content.style.display = 'block';
+                const alTab = document.getElementById('main-tab-autolevel');
+                if (alTab) alTab.style.display = 'none';
+            } else {
+                content.style.display = 'block';
+                const pbTab = document.getElementById('main-tab-probing');
+                if (pbTab) pbTab.style.display = 'none';
+            }
+        } else {
+            console.warn("switchMainTab: Content not found for ID:", 'main-tab-' + tabName);
+        }
+
+        // Save State
+        if (settings.activeTab !== tabName) {
+            console.log("Saving new active tab:", tabName);
+            settings.activeTab = tabName;
+            saveSettings();
+        }
+
+        // Force redraw if switching to autolevel to ensure visualizer is consistent
+        if (tabName === 'autolevel') {
+            // Small timeout to allow display:block to render layout
+            setTimeout(() => {
+                if (probePoints.length > 0) {
+                    drawMesh();
+                }
+            }, 50);
+        }
+
+        // Force widget resize update
+        setTimeout(() => {
+            window.dispatchEvent(new Event('resize'));
+        }, 100);
+    };
+
+    window.toggleGlobalSettings = function () {
+        const panel = document.getElementById('globalSettings');
+        const btn = document.getElementById('btnGlobalSettings');
+        // Toggle display
+        if (panel.style.display === 'none') {
+            panel.style.display = 'block';
+            btn.classList.add('active');
+            localStorage.setItem('global_widget_settings_open', 'true');
+        } else {
+            panel.style.display = 'none';
+            btn.classList.remove('active');
+            localStorage.setItem('global_widget_settings_open', 'false');
+        }
+
+        // Force widget resize update
+        setTimeout(() => {
+            window.dispatchEvent(new Event('resize'));
+        }, 100);
+    };
+
+
+
+    // Remove toggleHelp and openTab if they were purely for Help UI
+    // But openTab might be useful elsewhere? 
+    // Wait, openTab was used for the Help Tabs. Since help tabs are gone, we can remove/ignore.
+    // However, confirmProbe relies on "tab-corner" etc existing. Which they do in the hidden section.
+    // So logic remains valid. HTML changes are key.
+
+
+
+    // Probing Variables
+
+    function getProbeVal(id) {
+        const el = document.getElementById(id);
+        const val = parseFloat(el ? el.value : 0);
+        return isNaN(val) ? 0 : val;
+    }
+
+    function getProbeParams() {
+        const dia = getProbeVal('probeDia');
+        const deflect = getProbeVal('probeDeflection');
+        const ret = getProbeVal('retract');
+        const maxTravel = getProbeVal('maxTravel');
+        const safeZ = getProbeVal('safeZ');
+        const sizeX = getProbeVal('sizeX');
+        const sizeY = getProbeVal('sizeY');
+        const spacing = getProbeVal('probeSpacing'); // New Param
+        const probeDepth = getProbeVal('probeDepth');
+        const fast = getProbeVal('feedFast');
+        const slow = getProbeVal('feedSlow');
+        const plateThickness = getProbeVal('plateThickness');
+        const r = (dia / 2) - deflect;
+
+        return { dia, deflect, ret, maxTravel, safeZ, sizeX, sizeY, spacing, probeDepth, fast, slow, plateThickness, r };
+    }
+
+    // --- MODAL MANAGER ---
+    const modalManager = new window.ModalManager({
+        sendGcode: sendGcode,
+        startSkewProbe: startSkewProbe,
+        getProbeParams: getProbeParams
+    });
+
+    // Expose close globally for HTML onclick
+    window.closeModal = function () {
+        modalManager.close();
+    };
+
+    window.run = function (type, arg) {
+        const params = getProbeParams();
+        let g = "";
+        let probeTitle = "Confirm Probe";
+
+        if (type === 'surface') {
+            probeTitle = "Probe Z Surface (Workpiece)";
+            g = window.GCodeGenerator.generateSurfaceProbe(params);
+        }
+        else if (type === 'edge') {
+            let axis = arg.charAt(0);
+            let dir = arg.charAt(1);
+
+            let edgeName = "Edge";
+            if (axis === 'X' && dir === '+') edgeName = "Right Edge (X+)";
+            if (axis === 'X' && dir === '-') edgeName = "Left Edge (X-)";
+            if (axis === 'Y' && dir === '+') edgeName = "Back Edge (Y+)";
+            if (axis === 'Y' && dir === '-') edgeName = "Front Edge (Y-)";
+            probeTitle = `Probe ${edgeName}`;
+
+            g = window.GCodeGenerator.generateEdgeProbe(axis, dir, params);
+        }
+        else if (type === 'pocket') {
+            probeTitle = "Probe Hole Center";
+            g = window.GCodeGenerator.generateHoleProbe(params);
+        }
+        else if (type === 'boss') {
+            probeTitle = "Probe Block Center";
+            // Default to X
+            g = window.GCodeGenerator.generateBlockProbe('x', params);
+        }
+        else if (type === 'z_touchplate') {
+            probeTitle = "Probe Z Touchplate";
+            g = window.GCodeGenerator.generateZTouchplateProbe(params);
+        }
+        else if (type === 'corner') {
+            let xDir = 0;
+            let yDir = 0;
+            if (arg.includes('L')) xDir = -1;
+            if (arg.includes('R')) xDir = 1;
+            if (arg.includes('B')) yDir = -1;
+            if (arg.includes('T')) yDir = 1;
+
+            let cornerName = "";
+            if (yDir === 1) cornerName += "Top ";
+            if (yDir === -1) cornerName += "Bottom ";
+            if (xDir === -1) cornerName += "Left";
+            if (xDir === 1) cornerName += "Right";
+
+            probeTitle = `Probe ${cornerName} Corner`;
+            g = window.GCodeGenerator.generateCornerProbe(arg, params);
+        }
+        else if (type === 'skew') {
+            probeTitle = "Measure Skew (Y Front)";
+            // Initial dummy GCode, will be dynamically generated/managed
+            g = "(skew_start)";
+        }
+
+
+        modalManager.confirmProbe(g, type, probeTitle);
+    };
+
+    // Bind Local Confirm Button for Probing
+    const btnConfirmRun = document.getElementById('btnConfirmRun');
+    if (btnConfirmRun) {
+        btnConfirmRun.addEventListener('click', function () {
+            modalManager.runLocal();
+        });
+    }
+
+    // Persistence for Probing
+    const PROBE_SETTINGS_KEY = 'probe_widget_settings_v1';
+    const PROBE_INPUT_IDS = ['probeDia', 'probeDeflection', 'retract', 'maxTravel', 'safeZ', 'sizeX', 'sizeY', 'feedSlow', 'feedFast', 'plateThickness', 'probeDepth'];
+
+    function saveProbeSettings() {
+        const settings = {};
+        PROBE_INPUT_IDS.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) settings[id] = el.value;
+        });
+        localStorage.setItem(PROBE_SETTINGS_KEY, JSON.stringify(settings));
+    }
+
+    function loadProbeSettings() {
+        const stored = localStorage.getItem(PROBE_SETTINGS_KEY);
+        if (stored) {
+            const settings = JSON.parse(stored);
+            PROBE_INPUT_IDS.forEach(id => {
+                if (settings[id] !== undefined) {
+                    const el = document.getElementById(id);
+                    if (el) el.value = settings[id];
+                }
+            });
+        }
+        // UI State restored by loadSettings (global)
+    }
+
+    // Auto-save on change
+    PROBE_INPUT_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.addEventListener('change', saveProbeSettings);
+            el.addEventListener('input', saveProbeSettings);
+        }
+    });
+
+    // Load Probing Settings
+    loadProbeSettings();
+    // Default Tab
+    window.switchMainTab('autolevel');
 
 })();

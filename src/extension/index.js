@@ -195,12 +195,22 @@ function callback(err, socket) {
 
   let autolevel = new Autolevel(socket, options)
   socket.on('serialport:write', function (data, context) {
-    if (data.indexOf('#autolevel_reapply') >= 0 && context && context.source === 'feeder') {
+    // Check for comment-based commands (to avoid Grbl errors) OR legacy # commands
+    // Relaxed context check to support different widget configurations
+    if ((data.indexOf('(autolevel_reapply)') >= 0 || data.indexOf('#autolevel_reapply') >= 0) && context) {
       autolevel.reapply(data, context)
-    } else if (data.indexOf('#autolevel_get_mesh') >= 0 && context && context.source === 'feeder') {
+    } else if ((data.indexOf('(autolevel_get_mesh)') >= 0 || data.indexOf('#autolevel_get_mesh') >= 0) && context) {
       autolevel.dumpMesh();
-    } else if (data.indexOf('#autolevel') >= 0 && context && context.source === 'feeder') {
-      autolevel.start(data, context)
+    } else if ((data.indexOf('(autolevel') >= 0 || data.indexOf('#autolevel') >= 0) && context) {
+      if (data.indexOf('skew') >= 0) {
+        autolevel.setSkew(data, context);
+      } else if (data.indexOf('fetch_settings') >= 0) {
+        autolevel.fetchSettings();
+      } else if (data.indexOf('save_settings') >= 0) {
+        autolevel.saveSettings(data);
+      } else {
+        autolevel.start(data, context);
+      }
     } else if (data.indexOf('PROBEOPEN') > 0) {
       console.log(`Probe file open command: ${data}`);
       let startNdx = data.indexOf('PROBEOPEN') + 9;

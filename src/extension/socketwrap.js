@@ -1,19 +1,23 @@
 module.exports = class SocketWrap {
-  constructor (socket, port) {
+  constructor(socket, port) {
     this.socket = socket
     this.port = port
   }
 
-  sendGcode (gcode) {
+  sendGcode(gcode) {
     // console.log('sending gcode:', gcode);
-    this.socket.emit('command', this.port, 'gcode', gcode)    
+    this.socket.emit('command', this.port, 'gcode', gcode)
   }
 
-  loadGcode (name, gcode) {
+  sendMessage(msg) {
+    this.socket.emit('write', this.port, msg + '\n');
+  }
+
+  loadGcode(name, gcode) {
     this.socket.emit('command', this.port, 'gcode:load', name, gcode)
   }
 
-  stopGcode (file, gcode) {
+  stopGcode(file, gcode) {
     this.socket.emit('command', this.port, 'gcode:stop', { force: true })
   }
 }
