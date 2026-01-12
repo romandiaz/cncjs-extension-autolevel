@@ -13,7 +13,10 @@
     const elMargin = document.getElementById('margin');
     const elGrid = document.getElementById('grid');
     const btnAutolevel = document.getElementById('btn-autolevel');
-    const btnReapply = document.getElementById('btn-reapply');
+    const btnApplyMesh = document.getElementById('btn-apply-mesh');
+    const btnApplySkew = document.getElementById('btn-apply-skew');
+    const btnClearMesh = document.getElementById('btn-clear-mesh');
+    const btnClearSkew = document.getElementById('btn-clear-skew');
     const canvas = document.getElementById('mesh-canvas');
     const ctx = canvas ? canvas.getContext('2d') : null;
     const statusText = document.getElementById('status-text');
@@ -116,6 +119,12 @@
             if (btn) btn.classList.add('active');
         }
 
+        // Hide loading overlay
+        const loadingOverlay = document.getElementById('loading-overlay');
+        if (loadingOverlay) {
+            loadingOverlay.style.display = 'none';
+        }
+
         validateInputs();
         updateButtonState(socket && controllerPort);
     }
@@ -137,6 +146,7 @@
         console.log("Saving settings to server:", settings);
         // Send to server
         sendGcode(`(autolevel_save_settings ${JSON.stringify(settings)})`);
+        showSavedFeedback();
     }
 
     function validateInputs() {
@@ -185,15 +195,52 @@
         const inputsValid = validateInputs();
         const disabled = !connected || !inputsValid;
 
-        if (btnAutolevel) btnAutolevel.disabled = disabled;
-        if (btnAutolevel) {
-            btnAutolevel.title = !connected ? "Connect to controller first" : (!inputsValid ? "Check invalid settings" : "");
+        if (autolevelState.active) {
+            if (btnAutolevel) {
+                btnAutolevel.disabled = false;
+                btnAutolevel.title = "Stop Autolevel";
+            }
+            return;
         }
 
-        if (btnReapply) btnReapply.disabled = disabled; // Reapply might not need all inputs, but good practice.
+        if (btnAutolevel) {
+            const hasMesh = probePoints.length >= 3;
+            // Hide Autolevel (Probe) button if mesh exists. User must Clear Mesh first.
+            if (hasMesh) {
+                btnAutolevel.style.display = 'none';
+            } else {
+                btnAutolevel.style.display = '';
+                btnAutolevel.title = !connected ? "Connect to controller first" : (!inputsValid ? "Check invalid settings" : "");
+            }
+        }
 
-        const btnSkew = document.getElementById('btn-measure-skew');
-        if (btnSkew) btnSkew.disabled = disabled;
+        if (btnApplyMesh) {
+            const hasMesh = probePoints.length >= 3;
+            const applied = currentGcodeFile && currentGcodeFile.includes('#AL:');
+
+            if (hasMesh && !applied) {
+                btnApplyMesh.style.display = '';
+                btnApplyMesh.disabled = disabled;
+            } else {
+                btnApplyMesh.style.display = 'none';
+            }
+        }
+
+        if (btnClearMesh) {
+            const hasMesh = probePoints.length >= 3;
+            if (hasMesh) {
+                btnClearMesh.style.display = '';
+                btnClearMesh.disabled = disabled;
+            } else {
+                btnClearMesh.style.display = 'none';
+            }
+        }
+
+        if (btnApplySkew) btnApplySkew.disabled = disabled;
+        if (btnClearSkew) btnClearSkew.disabled = disabled;
+
+        const btnMeasureSkew = document.getElementById('btn-measure-skew');
+        if (btnMeasureSkew) btnMeasureSkew.disabled = disabled;
 
         // Probing buttons
         const probeButtons = document.querySelectorAll('.probe-grid button');
@@ -206,6 +253,7 @@
     let probePoints = [];
     let minZ = Infinity;
     let maxZ = -Infinity;
+    let drawTimeout = null;
 
     // Skew State
     let skewState = {
@@ -219,8 +267,13 @@
 
     // Autolevel State
     let autolevelState = {
-        active: false
+        active: false,
+        totalPoints: 0,
+        currentPoint: 0,
+        startTime: 0
     };
+
+    let currentGcodeFile = ""; // Track loaded filename
 
     // Connect to CNCjs via Socket.IO
     function connectSocket() {
@@ -266,6 +319,16 @@
             console.log('SOCKET: Closed');
         });
 
+        socket.on('gcode:load', function (name, gcode) {
+            console.log('GCODE LOADED:', name);
+            currentGcodeFile = name || "";
+            // We need to re-evaluate button states because the file might have changed status
+            // Since updateSkewDisplay requires knowledge of the angle, we might need to re-fetch settings or store the last angle.
+            // Ideally the extension sends "Skew Applied" status? 
+            // For now, let's just trigger a settings fetch which will refresh the angle display too.
+            sendGcode('(autolevel_fetch_settings)');
+        });
+
         socket.on('serialport:list', function (ports) {
             console.log('PORTS: Received list (' + ports.length + ')');
             const connectedPort = ports.find(p => p.inuse || p.isOpen);
@@ -290,7 +353,8 @@
             updateButtonState(true);
             setTimeout(() => {
                 sendGcode('(autolevel_get_mesh)');
-                // Fetch settings when port opens
+                // Fetch settings when port opens to sync skew/file state
+                sendGcode('(autolevel_fetch_settings)');
                 sendGcode('(autolevel_fetch_settings)');
                 // Fetch current skew
                 sendGcode('(autolevel_skew)');
@@ -315,6 +379,11 @@
     }
 
     function sendGcode(cmd) {
+        // Intercept autolevel start to clear mesh
+        if (cmd.startsWith('(autolevel ')) {
+            resetVisualizer();
+        }
+
         if (socket && controllerPort) {
             // CNCjs 1.9.x API: socket.emit('command', port, type, data)
             socket.emit('command', controllerPort, 'gcode', cmd);
@@ -354,15 +423,37 @@
         }
         cmd += ')';
 
-        // Set flag to expect completion
-        autolevelState.active = true;
-
-        modalManager.confirmProbe(cmd, 'autolevel-confirm', 'Initiate Surface Map');
+        // NOTE: autolevelState.active will be set to true when "auto-leveling started" is received
+        modalManager.confirmProbe(cmd, 'autolevel-confirm', 'Initiate Surface Map', 'Initiate');
     });
 
-    btnReapply.addEventListener('click', () => {
-        modalManager.confirmProbe('(autolevel_reapply)', 'reapply-confirm', 'Reapply Compensation');
-    });
+    // btnReapply listener replaced:
+    if (btnApplyMesh) {
+        btnApplyMesh.addEventListener('click', () => {
+            modalManager.confirmProbe('(autolevel_apply_mesh)', 'apply-mesh-manual', 'Apply Surface Map?', 'Apply Mesh');
+        });
+    }
+
+
+    if (btnApplySkew) {
+        btnApplySkew.addEventListener('click', () => {
+            modalManager.confirmProbe('(autolevel_apply_skew)', 'apply-skew-manual', 'Apply Skew?', 'Apply Skew');
+        });
+    }
+
+
+    if (btnClearSkew) {
+        btnClearSkew.addEventListener('click', () => {
+            modalManager.confirmProbe('(autolevel_skew A0)', 'clear-skew-confirm', 'Clear Skew Compensation', 'Clear Skew');
+        });
+    }
+
+    if (btnClearMesh) {
+        btnClearMesh.addEventListener('click', () => {
+            modalManager.confirmProbe('(autolevel_clear_mesh)', 'clear-mesh-confirm', 'Clear Mesh Data?', 'Clear Mesh');
+        });
+    }
+
 
     // Data Handling
     function onSerialData(data) {
@@ -425,22 +516,65 @@
                 if (cleanLine.includes('(AL: dumping mesh start)')) {
                     resetVisualizer();
                     statusText.innerText = "Receiving mesh data...";
-                    statusText.innerText = "Receiving mesh data...";
+                } else if (cleanLine.includes('(AL: auto-leveling started)')) {
+                    autolevelState.active = true;
+                    autolevelState.currentPoint = 0;
+                    autolevelState.totalPoints = 0;
+                    autolevelState.startTime = Date.now();
+                    statusText.innerText = "Starting autolevel...";
+                    updateButtonState(true); // Ensure buttons update
+                    modalManager.updateProgress(0, 0); // Reset modal progress
+                } else if (cleanLine.includes('(AL: total_points')) {
+                    const m = /total_points\s+(\d+)/.exec(cleanLine);
+                    if (m) {
+                        autolevelState.totalPoints = parseInt(m[1]);
+                        modalManager.updateProgress(autolevelState.currentPoint, autolevelState.totalPoints);
+                    }
+
                 } else if (cleanLine.includes('(AL: finished)') || cleanLine.includes('(AL: dz_avg=')) {
                     statusText.innerText = "Autolevel complete.";
                     drawMesh();
 
                     if (autolevelState.active) {
                         autolevelState.active = false;
+                        updateButtonState(true);
                         // Trigger confirmation to apply
-                        // The command to run on confirm is (autolevel_reapply)
-                        modalManager.confirmProbe('(autolevel_reapply)', 'apply-mesh-confirm', 'Apply Compensation');
+                        modalManager.close(); // Close running modal
+                        modalManager.confirmProbe('(autolevel_apply_mesh)', 'apply-mesh-confirm', 'Probe Complete', 'Apply Mesh');
+
                     }
 
                 } else if (cleanLine.includes('(AL: applying')) {
                     statusText.innerText = "Applying mesh compensation...";
                 } else if (cleanLine.includes('(AL: progress')) {
-                    statusText.innerText = cleanLine.replace(/^\(AL:\s*/, '').replace(/\)\s*$/, '');
+                    // Format: (AL: progress current total)
+                    const m = /progress\s+(\d+)\s+(\d+)/.exec(cleanLine);
+                    if (m) {
+                        autolevelState.currentPoint = parseInt(m[1]);
+                        autolevelState.totalPoints = parseInt(m[2]);
+
+                        let msg = `Probing point ${autolevelState.currentPoint} / ${autolevelState.totalPoints}`;
+                        let timeStr = "";
+
+                        if (autolevelState.startTime && autolevelState.currentPoint > 1) {
+                            const elapsed = Date.now() - autolevelState.startTime;
+                            const avgPerPoint = elapsed / autolevelState.currentPoint;
+                            const remaining = autolevelState.totalPoints - autolevelState.currentPoint;
+                            const estRemaining = avgPerPoint * remaining;
+
+                            const estSec = Math.ceil(estRemaining / 1000);
+                            const finalTime = estSec > 60
+                                ? `${Math.floor(estSec / 60)}m ${estSec % 60}s`
+                                : `${estSec}s`;
+                            timeStr = `🕒 Time Left: ${finalTime}`;
+                        }
+
+                        // Update modal with time string
+                        modalManager.updateProgress(autolevelState.currentPoint, autolevelState.totalPoints, timeStr);
+
+                        // Keep main status text clean
+                        statusText.innerText = msg;
+                    }
                 } else if (cleanLine.includes('(AL: no mesh data')) {
                     statusText.innerText = "No mesh data found on server.";
                 } else if (cleanLine.includes('PRB:')) {
@@ -455,6 +589,26 @@
                         const val = parseFloat(m[1]);
                         updateSkewDisplay(val);
                     }
+                } else if (cleanLine.includes('(AL: mesh cleared)')) {
+                    statusText.innerText = "Mesh data cleared.";
+                    resetVisualizer();
+                } else if (cleanLine.includes('AL: Loaded File:')) {
+                    // Parse: (AL: Loaded File: #SK:file.nc)
+                    const m = /Loaded File:\s*(.*)\)/.exec(cleanLine);
+                    if (m) {
+                        currentGcodeFile = m[1].trim();
+                        console.log("Synced current G-code file from extension:", currentGcodeFile);
+                        // Trigger display update using current angle (we might not have it yet if this comes before Skew report)
+                        // But usually Skew report comes right before this.
+                        // Let's rely on the Skew report triggering the update, OR trigger it here if angle is known.
+                        // Angle is in the text element.
+                        const valEl = document.getElementById('skew-val');
+                        if (valEl) {
+                            const angle = parseFloat(valEl.innerText) || 0;
+                            updateSkewDisplay(angle);
+                        }
+                        updateButtonState(socket && controllerPort);
+                    }
                 }
             });
         }
@@ -465,11 +619,84 @@
         const valEl = document.getElementById('skew-val');
         if (el && valEl) {
             valEl.innerText = angle.toFixed(3);
-            if (Math.abs(angle) > 0.0001) {
+            const btnClear = document.getElementById('btn-clear-skew');
+            const btnApply = document.getElementById('btn-apply-skew');
+            const btnMeasure = document.getElementById('btn-measure-skew'); // New requirement
+
+            const hasSkew = Math.abs(angle) > 0.0001;
+            const isApplied = currentGcodeFile && currentGcodeFile.includes('#SK:');
+            const msgEl = document.getElementById('skew-locked-msg');
+
+            if (hasSkew) {
+                if (msgEl) msgEl.style.display = 'none';
                 el.style.display = 'block';
+
+                // Hide Measure if skew exists OR if applied (User request)
+                if (btnMeasure) {
+                    if (isApplied) {
+                        btnMeasure.disabled = true;
+                        btnMeasure.style.display = 'none';
+                    } else {
+                        // Skew exists (angle > 0), so we hide Measure anyway to force Reset first?
+                        // Yes, if hasSkew, original logic was to hide Measure.
+                        // So regardless of isApplied, if hasSkew, we hide Measure.
+                        btnMeasure.disabled = true;
+                        btnMeasure.style.display = 'none';
+                    }
+                }
+
+                if (btnClear) {
+                    btnClear.disabled = false;
+                    btnClear.style.display = '';
+                    btnClear.title = "Clear Skew Compensation";
+                }
+
+                // Hide Apply if already applied
+                if (btnApply) {
+                    if (isApplied) {
+                        btnApply.disabled = true;
+                        btnApply.style.display = 'none';
+                        btnApply.title = "Skew already applied to file";
+                    } else {
+                        btnApply.disabled = false;
+                        btnApply.style.display = '';
+                        btnApply.title = "Apply Skew to G-code";
+                    }
+                }
             } else {
-                // el.style.display = 'none'; // Optional: hide if 0? Or always show to indicate feature exists?
-                el.style.display = 'block'; // Always show
+                // el.style.display = 'none'; // Keep status visible to show it is zero?
+                el.style.display = 'block';
+
+                // Show "Skew Locked" message if applied but no current skew (meaning buttons are hidden)
+                // Actually, if isApplied, Measure adds are hidden. Apply is hidden. Reset is hidden.
+                // So if isApplied && !hasSkew, user sees NO buttons. This is where we want the message.
+                if (isApplied) {
+                    if (msgEl) msgEl.style.display = 'block';
+                } else {
+                    if (msgEl) msgEl.style.display = 'none';
+                }
+
+                // Show Measure if no skew AND not applied
+                if (btnMeasure) {
+                    if (isApplied) {
+                        btnMeasure.disabled = true;
+                        btnMeasure.style.display = 'none';
+                    } else {
+                        btnMeasure.disabled = false;
+                        btnMeasure.style.display = '';
+                    }
+                }
+
+                if (btnClear) {
+                    btnClear.disabled = true;
+                    btnClear.style.display = 'none'; // Hide
+                    btnClear.title = "No Skew Applied";
+                }
+                if (btnApply) {
+                    btnApply.disabled = true;
+                    btnApply.style.display = 'none'; // Hide
+                    btnApply.title = "No Skew to Apply";
+                }
             }
         }
     }
@@ -581,8 +808,13 @@
             angle: angleDeg
         });
 
-        const cmd = `(autolevel_skew A${angleDeg.toFixed(5)})`;
-        modalManager.confirmProbe(cmd, 'skew-result', 'Skew Measurement Result');
+        // 1. Send the SET command immediately to save state in extension
+        const setCmd = `(autolevel_skew A${angleDeg.toFixed(5)})`;
+        sendGcode(setCmd);
+
+        // 2. Modal confirm action is now explicitly APPLY
+        const applyCmd = `(autolevel_apply_skew)`;
+        modalManager.confirmProbe(applyCmd, 'skew-result', 'Skew Measurement Result', 'Apply Skew');
     }
     let graph3d = null;
 
@@ -595,14 +827,19 @@
             clearTimeout(drawTimeout);
             drawTimeout = null;
         }
-        if (graph3d) {
-            // We can just clear data or redraw with empty
-            // drawMesh(); // Prevent "Graph data not initialized" error on empty data
+        updateButtonState(socket && controllerPort);
+
+        const container = document.getElementById('visualizer-container');
+        if (container) {
+            container.innerHTML = '';
         }
+        graph3d = null;
     }
 
-    let drawTimeout = null;
     function addProbePoint(x, y, z) {
+        // Fix rounding errors: Snap tiny values to 0
+        if (Math.abs(z) < 0.0001) z = 0;
+
         // console.log(`Adding probe point: ${x}, ${y}, ${z}`);
         probePoints.push({ x, y, z });
 
@@ -651,18 +888,24 @@
                     distance: 1.5
                 },
                 tooltip: function (point) {
-                    return 'X: ' + point.x + '<br>Y: ' + point.y + '<br>Z: ' + point.z;
+                    return 'X: ' + point.x + '<br>Y: ' + point.y + '<br>Z: ' + point.z.toFixed(3);
                 },
                 // Heatmap Settings
                 showLegend: true,
                 legendLabel: 'Z-Height',
                 valueMin: minZ,
                 valueMax: maxZ,
+                // Format axis and legend values
+                zValueLabel: function (z) {
+                    return z.toFixed(3);
+                },
                 // Optional: Customize colors if needed, default is usually a heat gradient
             };
 
             if (!graph3d) {
                 graph3d = new vis.Graph3d(container, data, options);
+                // Monkey-patch the canvas context to force formatting of scientific notation
+                interceptCanvasLabels(container);
             } else {
                 graph3d.setOptions(options); // Update options for verticalRatio
                 graph3d.setData(data); // Efficiently update data
@@ -679,6 +922,36 @@
         } catch (err) {
             console.error("Visualizer error:", err);
             statusText.innerText = "Error initializing visualizer: " + err.message;
+        }
+    }
+
+    // Canvas Monkey-Patch to fix Vis.js scientific notation in legend
+    function interceptCanvasLabels(container) {
+        try {
+            const canvas = container.querySelector('canvas');
+            if (!canvas) return;
+
+            const ctx = canvas.getContext('2d');
+            if (ctx._patched) return;
+
+            const originalFillText = ctx.fillText;
+            ctx.fillText = function (text, x, y, maxWidth) {
+                let display = text;
+                // Check for scientific notation or floats
+                if (typeof text === 'string' || typeof text === 'number') {
+                    const str = String(text);
+                    // Filter for numbers that appear to be coordinates (skip purely integer labels if preferred, but consistency is good)
+                    if (!isNaN(parseFloat(str)) && isFinite(str)) {
+                        // Apply fixed formatting
+                        display = parseFloat(str).toFixed(3);
+                    }
+                }
+                originalFillText.call(this, display, x, y, maxWidth);
+            };
+            ctx._patched = true;
+            console.log("Canvas context patched for label formatting.");
+        } catch (e) {
+            console.warn("Failed to patch canvas context:", e);
         }
     }
 
@@ -852,7 +1125,34 @@
     const modalManager = new window.ModalManager({
         sendGcode: sendGcode,
         startSkewProbe: startSkewProbe,
-        getProbeParams: getProbeParams
+        getProbeParams: getProbeParams,
+        onStop: () => {
+            // Stop Autolevel - Drip Feed Method
+            // 1. Feed Hold (!) to pause motion immediately
+            // 2. Send (autolevel_stop) to clear extension queue
+            // 3. Send Resume (~) to allow the single pending move (retract) to finish/abort gracefully?
+            // Actually, if we just Hold, we are stuck. If we Resume, it finishes the current tiny probe move.
+            // Since queue is cleared, it will stop after that. This prevents Z-drop.
+            if (socket && controllerPort) {
+                console.log("STOPPING: Sending Feed Hold -> Stop Cmd -> Resume");
+                socket.emit('write', controllerPort, '!'); // Feed Hold
+
+                // Give a tiny delay for Hold to take effect? Not strictly needed but safe.
+                setTimeout(() => {
+                    sendGcode('(autolevel_stop)'); // Tell extension to clear queue
+
+                    setTimeout(() => {
+                        socket.emit('write', controllerPort, '~'); // Resume to finish current move
+                    }, 200);
+                }, 100);
+            } else {
+                sendGcode('!');
+                sendGcode('(autolevel_stop)');
+                sendGcode('~');
+            }
+            statusText.innerText = "Stopping... (Finishing current move)";
+            autolevelState.active = false;
+        }
     });
 
     // Expose close globally for HTML onclick
@@ -919,7 +1219,7 @@
         }
 
 
-        modalManager.confirmProbe(g, type, probeTitle);
+        modalManager.confirmProbe(g, type, probeTitle, "Run Probe");
     };
 
     // Bind Local Confirm Button for Probing
@@ -941,6 +1241,7 @@
             if (el) settings[id] = el.value;
         });
         localStorage.setItem(PROBE_SETTINGS_KEY, JSON.stringify(settings));
+        showSavedFeedback();
     }
 
     function loadProbeSettings() {
@@ -970,5 +1271,40 @@
     loadProbeSettings();
     // Default Tab
     window.switchMainTab('autolevel');
+
+    // --- AUTO-RESIZE ---
+    const updateWidgetHeight = () => {
+        const height = document.body.scrollHeight;
+        if (token) {
+            window.parent.postMessage({
+                token: token,
+                action: {
+                    type: 'resize',
+                    payload: { height: height }
+                }
+            }, '*');
+        }
+    };
+
+    const bodyObserver = new ResizeObserver(entries => {
+        updateWidgetHeight();
+    });
+    bodyObserver.observe(document.body);
+    // Initial call
+    setTimeout(updateWidgetHeight, 100);
+
+    function showSavedFeedback() {
+        const msg = document.getElementById('saved-msg');
+        if (!msg) return;
+
+        // Show
+        msg.classList.add('show');
+
+        // Hide after 1s
+        if (msg.timeout) clearTimeout(msg.timeout);
+        msg.timeout = setTimeout(() => {
+            msg.classList.remove('show');
+        }, 1000);
+    }
 
 })();

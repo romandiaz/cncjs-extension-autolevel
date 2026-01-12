@@ -3,6 +3,7 @@ class ModalManager {
         this.sendGcode = callbacks.sendGcode;
         this.startSkewProbe = callbacks.startSkewProbe;
         this.getProbeParams = callbacks.getProbeParams; // Need this for injections
+        this.onStop = callbacks.onStop; // Callback for stop button
         this.pendingGcode = '';
         this.skewSpacing = 50; // default
     }
@@ -87,7 +88,16 @@ class ModalManager {
                 .al-btn-primary:hover {
                     background-color: #286090;
                 }
+                .al-btn-danger {
+                    background-color: #d9534f;
+                    color: white;
+                    border-color: #d43f3a;
+                }
+                .al-btn-danger:hover {
+                    background-color: #c9302c;
+                }
              `;
+
             parentDoc.head.appendChild(style);
         }
     }
@@ -119,7 +129,7 @@ class ModalManager {
         this.pendingGcode = '';
     }
 
-    confirmProbe(gcode, type, title) {
+    confirmProbe(gcode, type, title, actionText = "Run Probe") {
         this.pendingGcode = gcode;
 
         // Content source mapping
@@ -133,7 +143,12 @@ class ModalManager {
         if (type === 'skew-result') tabId = 'tab-skew-result';
         if (type === 'autolevel-confirm') tabId = 'tab-autolevel-confirm';
         if (type === 'apply-mesh-confirm') tabId = 'tab-apply-mesh-confirm';
-        if (type === 'reapply-confirm') tabId = 'tab-reapply-confirm';
+        if (type === 'apply-mesh-confirm') tabId = 'tab-apply-mesh-confirm';
+        if (type === 'reapply-confirm') tabId = 'tab-reapply-confirm'; // Deprecated but kept for safety?
+        if (type === 'apply-skew-manual') tabId = 'tab-apply-skew-manual';
+        if (type === 'apply-mesh-manual') tabId = 'tab-apply-mesh-manual';
+        if (type === 'clear-mesh-confirm') tabId = 'tab-clear-mesh-confirm';
+        if (type === 'clear-skew-confirm') tabId = 'tab-clear-skew-confirm';
 
         const sourceEl = document.getElementById(tabId);
         if (!sourceEl) {
@@ -161,7 +176,7 @@ class ModalManager {
                     <div class="al-modal-body" id="al-confirm-body">${finalContent}</div>
                     <div class="al-modal-footer">
                         <button class="al-btn" id="al-btn-cancel">Cancel</button>
-                        <button class="al-btn al-btn-primary" id="al-btn-run">Run Probe</button>
+                        <button class="al-btn ${type.startsWith('clear') ? 'al-btn-danger' : 'al-btn-primary'}" id="al-btn-run">${actionText}</button>
                     </div>
                 </div>
             `;
@@ -214,7 +229,12 @@ class ModalManager {
                     overlay.remove();
                 } else if (this.pendingGcode) {
                     if (this.sendGcode) this.sendGcode(this.pendingGcode);
-                    overlay.remove();
+                    // Do not close immediately if it's autolevel-confirm
+                    if (type === 'autolevel-confirm') {
+                        this.showRunningState(overlay);
+                    } else {
+                        overlay.remove();
+                    }
                 }
             };
 
@@ -249,10 +269,18 @@ class ModalManager {
 
                 const modal = document.getElementById('confirmModal');
                 if (modal) modal.classList.add('open');
-                setTimeout(() => {
-                    const btn = document.getElementById('btnConfirmRun');
-                    if (btn) btn.focus();
-                }, 50);
+                if (btn) {
+                    btn.innerText = actionText;
+                    // Apply danger class if needed
+                    if (type.startsWith('clear')) {
+                        btn.classList.add('btn-danger');
+                        btn.classList.remove('primary');
+                    } else {
+                        btn.classList.remove('btn-danger');
+                        btn.classList.add('primary');
+                    }
+                    setTimeout(() => btn.focus(), 50);
+                }
             }
         }
     }
@@ -397,6 +425,61 @@ class ModalManager {
         if (elP1) elP1.innerText = `(${p1.x.toFixed(3)}, ${p1.y.toFixed(3)})`;
         if (elP2) elP2.innerText = `(${p2.x.toFixed(3)}, ${p2.y.toFixed(3)})`;
         if (elAngle) elAngle.innerText = angle.toFixed(4);
+    }
+
+    showRunningState(overlay) {
+        // Transition modal to running state
+        const body = overlay.querySelector('.al-modal-body');
+        const footer = overlay.querySelector('.al-modal-footer');
+        const header = overlay.querySelector('.al-modal-header');
+
+        if (header) header.innerText = "Autoleveling in Progress...";
+
+        body.innerHTML = `
+            <div style="margin-bottom: 10px;">Probing surface points...</div>
+            <div class="progress-container" style="display: block; background: #eee; height: 15px; border-radius: 8px; overflow: hidden; border: 1px solid #ccc;">
+                <div id="al-modal-progress" style="width: 0%; height: 100%; background: #337ab7; transition: width 0.3s;"></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-top: 5px; font-size: 11px; color: #777;">
+                <span id="al-modal-status">Initializing...</span>
+                <span id="al-modal-time"></span>
+            </div>
+        `;
+
+        // Replace footer buttons with Stop
+        footer.innerHTML = '';
+        const btnStop = document.createElement('button');
+        btnStop.className = 'al-btn';
+        btnStop.style.backgroundColor = '#d9534f';
+        btnStop.style.color = 'white';
+        btnStop.style.borderColor = '#d43f3a';
+        btnStop.innerText = 'Stop / Cancel';
+        btnStop.onclick = () => {
+            if (this.onStop) this.onStop();
+            overlay.remove();
+        };
+        footer.appendChild(btnStop);
+    }
+
+    updateProgress(current, total, timeRemaining) {
+        if (!this.canAccessParent()) return;
+        const parentDoc = window.parent.document;
+        const bar = parentDoc.getElementById('al-modal-progress');
+        const status = parentDoc.getElementById('al-modal-status');
+        const timeEl = parentDoc.getElementById('al-modal-time');
+
+        if (bar && total > 0) {
+            const pct = (current / total) * 100;
+            bar.style.width = pct + '%';
+        }
+        if (status) {
+            status.innerText = `Point ${current} / ${total}`;
+        }
+        if (timeEl && timeRemaining) {
+            timeEl.innerText = timeRemaining;
+        } else if (timeEl) {
+            timeEl.innerText = '';
+        }
     }
 
     // Called from Main Controller to execute local run

@@ -38,6 +38,30 @@ body {
     /* Added padding back from original autolevel style */
 }
 
+/* --- Loading Overlay --- */
+#loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: #fff;
+    z-index: 10000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+    gap: 10px;
+    color: #555;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+#loading-overlay i {
+    font-size: 24px;
+    color: var(--primary-color);
+}
+
 /* --- Autolevel Specific Styles (Light Theme Adapted) --- */
 .widget-container {
     display: flex;
@@ -146,6 +170,17 @@ h3 {
     border-color: #204d74;
 }
 
+.btn-row {
+    display: flex;
+    gap: 10px;
+    align-items: stretch;
+}
+
+.btn-sm {
+    padding: 5px 10px;
+    font-size: 12px;
+}
+
 .btn-secondary {
     background-color: #5bc0de;
     border-color: #46b8da;
@@ -154,6 +189,13 @@ h3 {
 .btn-secondary:hover {
     background-color: #31b0d5;
     border-color: #269abc;
+}
+
+.btn-expand {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* Large Action Buttons */
@@ -186,12 +228,14 @@ h3 {
 
 #visualizer-container {
     width: 100%;
-    height: 200px;
+    aspect-ratio: 4 / 3;
     background-color: #f9f9f9;
     /* Light bg for visualizer */
     border: 1px solid #ddd;
     position: relative;
     overflow: hidden;
+    max-height: 550px;
+    margin: 0 auto;
 }
 
 #mesh-canvas {
@@ -444,6 +488,7 @@ input.is-invalid:focus {
 .tab:hover {
     background-color: #eee;
     color: #333;
+    font-weight: bold;
 }
 
 .tab.active {
@@ -705,4 +750,58 @@ button:disabled.btn-center {
     to {
         opacity: 1;
     }
+}
+
+/* Progress Bar */
+.progress-container {
+    width: 100%;
+    background-color: #eee;
+    height: 10px;
+    border-radius: 5px;
+    margin-top: 5px;
+    overflow: hidden;
+    display: none;
+    /* Hidden by default */
+}
+
+.progress-bar {
+    height: 100%;
+    background-color: var(--primary-color);
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+/* Stop Button Color */
+.btn-danger {
+    background-color: #d9534f;
+    border-color: #d43f3a;
+    color: white;
+}
+
+
+.btn-danger:hover {
+    background-color: #c9302c;
+    border-color: #ac2925;
+}
+
+.skew-msg {
+    color: #aaa;
+    font-size: 0.85em;
+    margin-top: 5px;
+    text-align: center;
+}
+
+/* Saved Inline Notification */
+.saved-msg {
+    color: #4cae4c;
+    /* Green */
+    font-weight: bold;
+    font-size: 11px;
+    margin-right: 10px;
+    opacity: 0;
+    transition: opacity 0.5s ease-in-out;
+}
+
+.saved-msg.show {
+    opacity: 1;
 }

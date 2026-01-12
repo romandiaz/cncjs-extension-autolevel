@@ -202,12 +202,20 @@ function callback(err, socket) {
     } else if ((data.indexOf('(autolevel_get_mesh)') >= 0 || data.indexOf('#autolevel_get_mesh') >= 0) && context) {
       autolevel.dumpMesh();
     } else if ((data.indexOf('(autolevel') >= 0 || data.indexOf('#autolevel') >= 0) && context) {
-      if (data.indexOf('skew') >= 0) {
+      if (data.indexOf('apply_skew') >= 0) {
+        autolevel.applyCompensation({ skew: true, mesh: false });
+      } else if (data.indexOf('apply_mesh') >= 0) {
+        autolevel.applyCompensation({ skew: false, mesh: true });
+      } else if (data.indexOf('clear_mesh') >= 0) {
+        autolevel.clearMesh();
+      } else if (data.indexOf('skew') >= 0) {
         autolevel.setSkew(data, context);
       } else if (data.indexOf('fetch_settings') >= 0) {
         autolevel.fetchSettings();
       } else if (data.indexOf('save_settings') >= 0) {
         autolevel.saveSettings(data);
+      } else if (data.indexOf('stop') >= 0) {
+        autolevel.stop();
       } else {
         autolevel.start(data, context);
       }

@@ -25,12 +25,17 @@
 </head>
 
 <body>
+    <div id="loading-overlay">
+        <i class="fa fa-spinner fa-spin"></i>
+        <span>Loading...</span>
+    </div>
     <div class="header-bar">
         <div class="main-tabs">
             <button id="tab-btn-autolevel" class="main-tab active"
                 onclick="switchMainTab('autolevel')">Compensation</button>
             <button id="tab-btn-probing" class="main-tab" onclick="switchMainTab('probing')">Probing</button>
         </div>
+        <span id="saved-msg" class="saved-msg">Saved <i class="fa fa-check"></i></span>
         <button class="btn-icon" id="btnGlobalSettings" onclick="toggleGlobalSettings()" title="Global Settings">
             <i class="fa fa-cog"></i>
         </button>
@@ -98,24 +103,42 @@
     <!-- Autolevel Tab Content -->
     <div id="main-tab-autolevel" class="main-tab-content active">
         <div class="widget-container">
-            <!-- Settings moved to Global Panel -->
-
-            <div class="panel actions-panel">
-                <button id="btn-measure-skew" class="btn btn-secondary btn-action-lg" onclick="run('skew')"><i
-                        class="fa fa-random"></i> Measure Skew (Y)</button>
-                <button id="btn-autolevel" class="btn btn-primary btn-action-lg"><i class="fa fa-map-o"></i> Initiate
-                    Surface Map</button>
-                <button id="btn-reapply" class="btn btn-secondary btn-action-lg"><i class="fa fa-check-circle"></i>
-                    Apply
-                    Compensation</button>
-            </div>
-
-            <div class="panel visualizer-panel">
+            <!-- Skew Compensation Panel -->
+            <div class="panel">
                 <div class="panel-header">
-                    <h3>Mesh Visualizer</h3>
+                    <h3>Skew Compensation</h3>
                     <div id="skew-status" class="skew-status" style="display: none;">Skew: <span
                             id="skew-val">0.000</span>&deg;</div>
                 </div>
+                <!-- Buttons -->
+                <div class="btn-row">
+                    <button id="btn-measure-skew" class="btn btn-secondary btn-expand" onclick="run('skew')"><i
+                            class="fa fa-random"></i> Measure Skew</button>
+                    <button id="btn-clear-skew" class="btn btn-danger" title="Clear Skew"><i
+                            class="fa fa-ban"></i></button>
+                    <button id="btn-apply-skew" class="btn btn-secondary btn-expand" title="Apply Skew Only"><i
+                            class="fa fa-check"></i> Apply Skew</button>
+                </div>
+                <div id="skew-locked-msg" class="skew-msg" style="display: none;">
+                    <i class="fa fa-lock"></i> Skew already applied to file.
+                </div>
+            </div>
+
+            <!-- Surface Map Panel -->
+            <div class="panel visualizer-panel">
+                <div class="panel-header">
+                    <h3>Surface Map / Visualizer</h3>
+                </div>
+                <!-- Controls moved here -->
+                <div class="btn-row" style="margin-bottom: 10px;">
+                    <button id="btn-autolevel" class="btn btn-primary btn-expand"><i class="fa fa-map-o"></i>
+                        Probe New Mesh</button>
+                    <button id="btn-clear-mesh" class="btn btn-danger" title="Clear Mesh Data"><i
+                            class="fa fa-ban"></i></button>
+                    <button id="btn-apply-mesh" class="btn btn-secondary btn-expand"
+                        title="Apply Surface Map to G-code"><i class="fa fa-check"></i> Apply Mesh</button>
+                </div>
+
                 <div id="visualizer-container"></div>
                 <div id="status-text">No mesh data.</div>
             </div>
@@ -159,34 +182,58 @@
                         probe Y again to calculate angle.</div>
                 </div>
             </div>
+            <div id="tab-clear-skew-confirm" class="tab-content">
+                <i class="fa fa-ban" style="font-size: 64px; margin: 20px; color: #d9534f;"></i>
+                <div><strong>Clear Skew?</strong></div>
+                <div style="margin: 15px 0;">This will reset the measured skew angle to
+                    0&deg;.<br><br><strong>Note:</strong> If you have already applied skew to your G-code, you must
+                    reload the file to remove it.</div>
+            </div>
+
             <div id="tab-skew-result" class="tab-content">
                 <i class="fa fa-balance-scale" style="font-size: 64px; margin: 20px; color: #555;"></i>
-                <div><strong>Skew Measurement Complete</strong></div>
+                <div><strong>Measurement Complete</strong></div>
                 <div style="margin: 15px 0; text-align: left; background: #f9f9f9; padding: 10px; border-radius: 4px;">
                     <div><strong>P1:</strong> <span id="skew-p1"></span></div>
                     <div><strong>P2:</strong> <span id="skew-p2"></span></div>
                     <div style="margin-top: 5px; font-size: 1.1em; color: #337ab7;"><strong>Angle:</strong> <span
                             id="skew-angle"></span>&deg;</div>
                 </div>
-                <div>Apply this compensation to future moves?</div>
+                <div>Apply this skew angle to your loaded G-code?</div>
             </div>
+
             <div id="tab-apply-mesh-confirm" class="tab-content">
                 <i class="fa fa-check-square-o" style="font-size: 64px; margin: 20px; color: #555;"></i>
-                <div><strong>Surface Mapping Complete</strong></div>
-                <div style="margin: 15px 0;"> The surface mesh has been generated. <br>Apply this compensation to the
-                    loaded G-code?</div>
+                <div><strong>Probe Complete</strong></div>
+                <div style="margin: 15px 0;"> Surface mesh generated successfully.<br><br>Do you want to apply this
+                    compensation to your currently loaded G-code?</div>
             </div>
+
             <div id="tab-autolevel-confirm" class="tab-content">
                 <i class="fa fa-th" style="font-size: 64px; margin: 20px; color: #555;"></i>
-                <div><strong>Initiate Surface Mapping?</strong><br>This will clear the current mesh and probe the
-                    surface
-                    based on your settings.</div>
+                <div><strong>Start Surface Mapping?</strong><br><strong>Warning:</strong> This will delete any existing
+                    mesh data.<br><br>The machine will probe the
+                    surface according to your "Probing" settings.</div>
             </div>
-            <div id="tab-reapply-confirm" class="tab-content">
-                <i class="fa fa-refresh" style="font-size: 64px; margin: 20px; color: #555;"></i>
-                <div><strong>Reapply Compensation?</strong><br>This will re-process the loaded G-code using the existing
-                    mesh and skew data.</div>
+            <div id="tab-apply-skew-manual" class="tab-content">
+                <i class="fa fa-random" style="font-size: 64px; margin: 20px; color: #555;"></i>
+                <div><strong>Apply Skew?</strong></div>
+                <div style="margin: 15px 0;">Apply current skew settings to the loaded G-code?</div>
             </div>
+            <div id="tab-apply-mesh-manual" class="tab-content">
+                <i class="fa fa-map-o" style="font-size: 64px; margin: 20px; color: #555;"></i>
+                <div><strong>Apply Surface Map?</strong></div>
+                <div style="margin: 15px 0;">Apply current surface mesh to the loaded G-code?</div>
+            </div>
+            <div id="tab-clear-mesh-confirm" class="tab-content">
+                <i class="fa fa-ban" style="font-size: 64px; margin: 20px; color: #d9534f;"></i>
+                <div><strong>Clear Mesh Data?</strong></div>
+                <div style="margin: 15px 0;">Are you sure you want to delete the current surface
+                    mesh?<br><br><strong>Note:</strong> If you have already applied the mesh to your
+                    G-code, you must reload the file to remove it.</div>
+            </div>
+
+
         </div>
 
         <!-- Settings moved to Global Panel -->

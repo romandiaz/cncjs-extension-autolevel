@@ -9,6 +9,7 @@ const alFileNamePrefix = '#AL:'
 const path = require('path');
 const DEFAULT_PROBE_FILE = path.join(__dirname, '../../__last_Z_probe.txt');
 const SETTINGS_FILE = path.join(__dirname, '../../autolevel_settings.json');
+const STATE_FILE = path.join(__dirname, '../../autolevel_state.json');
 
 
 const Units = {
@@ -54,7 +55,15 @@ module.exports = class Autolevel {
     this.mpos = { x: 0, y: 0, z: 0 };
     this.pos = { x: 0, y: 0, z: 0 };
     this.gcodeBounds = null;
+    this.gcodeBounds = null;
     this.buffer = ''; // Line buffer for serial data
+    this.g54Offset = null; // Store G54 offset explicitly
+    this.gcodeBounds = null;
+    this.buffer = ''; // Line buffer for serial data
+    this.g54Offset = null; // Store G54 offset explicitly
+    this.zZeroOffset = null; // Store initial Z probe for relative Z calculation
+    this.commandQueue = []; // Drip feed queue
+
 
     // Listen for controller state updates to track position
     socket.on('controller:state', (state) => {
@@ -77,6 +86,19 @@ module.exports = class Autolevel {
         }
       }
     });
+
+    // Load Persistent State (Skew)
+    try {
+      if (fs.existsSync(STATE_FILE)) {
+        const stateData = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+        if (stateData.skewAngle !== undefined) {
+          this.skewAngle = stateData.skewAngle;
+          console.log(`Loaded persisted skew angle: ${(this.skewAngle * 180 / Math.PI).toFixed(3)} deg`);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load autolevel state:', err);
+    }
 
     // Try to read in any pre-existing probe data...
     // Try to read in any pre-existing probe data...
@@ -113,62 +135,64 @@ module.exports = class Autolevel {
     }
 
     socket.on('gcode:load', (file, gc) => {
-      if (!file.startsWith(alFileNamePrefix)) {
-        this.gcodeFileName = file
-        this.gcode = gc
-        console.log('gcode loaded:', file)
+      // Allow loading #AL files to enable chaining
+      // if (!file.startsWith(alFileNamePrefix)) {
+      this.gcodeFileName = file
+      this.gcode = gc
+      console.log('gcode loaded:', file)
+      this.sckw.sendMessage(`(AL: DEBUG: gcode:load - SkewAngle: ${(this.skewAngle * 180 / Math.PI).toFixed(3)} deg, File: ${file})`);
 
-        // Calculate bounds manually using regex (more robust than library dependencies in this context)
-        this.gcodeBounds = {
-          min: { x: Infinity, y: Infinity },
-          max: { x: -Infinity, y: -Infinity }
-        };
+      // Calculate bounds manually using regex (more robust than library dependencies in this context)
+      this.gcodeBounds = {
+        min: { x: Infinity, y: Infinity },
+        max: { x: -Infinity, y: -Infinity }
+      };
 
-        const lines = gc.split('\n');
-        let abs = true; // Assume absolute positioning by default
-        let units = 1; // 1 = MM, 2 = Inches (matches Units.MILLIMETERS)
+      const lines = gc.split('\n');
+      let abs = true; // Assume absolute positioning by default
+      let units = 1; // 1 = MM, 2 = Inches (matches Units.MILLIMETERS)
 
-        // Helper to convert to MM
-        const toMM = (val, u) => (u === 2 ? val * 25.4 : val);
+      // Helper to convert to MM
+      const toMM = (val, u) => (u === 2 ? val * 25.4 : val);
 
-        let hasMoves = false;
+      let hasMoves = false;
 
-        lines.forEach(line => {
-          const lineStripped = this.stripComments(line);
+      lines.forEach(line => {
+        const lineStripped = this.stripComments(line);
 
-          // Check modes
-          if (/G90/i.test(lineStripped)) abs = true;
-          if (/G91/i.test(lineStripped)) abs = false;
-          if (/G20/i.test(lineStripped)) units = 2;
-          if (/G21/i.test(lineStripped)) units = 1;
+        // Check modes
+        if (/G90/i.test(lineStripped)) abs = true;
+        if (/G91/i.test(lineStripped)) abs = false;
+        if (/G20/i.test(lineStripped)) units = 2;
+        if (/G21/i.test(lineStripped)) units = 1;
 
-          // Only track absolute moves for bounds
-          if (abs && /(X|Y)/i.test(lineStripped)) {
-            const xMatch = /X([\.\+\-\d]+)/gi.exec(lineStripped);
-            const yMatch = /Y([\.\+\-\d]+)/gi.exec(lineStripped);
+        // Only track absolute moves for bounds
+        if (abs && /(X|Y)/i.test(lineStripped)) {
+          const xMatch = /X([\.\+\-\d]+)/gi.exec(lineStripped);
+          const yMatch = /Y([\.\+\-\d]+)/gi.exec(lineStripped);
 
-            if (xMatch) {
-              const x = toMM(parseFloat(xMatch[1]), units);
-              if (x < this.gcodeBounds.min.x) this.gcodeBounds.min.x = x;
-              if (x > this.gcodeBounds.max.x) this.gcodeBounds.max.x = x;
-              hasMoves = true;
-            }
-            if (yMatch) {
-              const y = toMM(parseFloat(yMatch[1]), units);
-              if (y < this.gcodeBounds.min.y) this.gcodeBounds.min.y = y;
-              if (y > this.gcodeBounds.max.y) this.gcodeBounds.max.y = y;
-              hasMoves = true;
-            }
+          if (xMatch) {
+            const x = toMM(parseFloat(xMatch[1]), units);
+            if (x < this.gcodeBounds.min.x) this.gcodeBounds.min.x = x;
+            if (x > this.gcodeBounds.max.x) this.gcodeBounds.max.x = x;
+            hasMoves = true;
           }
-        });
-
-        if (!hasMoves) {
-          this.gcodeBounds = null;
-          console.log('No bounds detected in G-code.');
-        } else {
-          console.log('Calculated G-code bounds:', this.gcodeBounds);
+          if (yMatch) {
+            const y = toMM(parseFloat(yMatch[1]), units);
+            if (y < this.gcodeBounds.min.y) this.gcodeBounds.min.y = y;
+            if (y > this.gcodeBounds.max.y) this.gcodeBounds.max.y = y;
+            hasMoves = true;
+          }
         }
+      });
+
+      if (!hasMoves) {
+        this.gcodeBounds = null;
+        console.log('No bounds detected in G-code.');
+      } else {
+        console.log('Calculated G-code bounds:', this.gcodeBounds);
       }
+      // }
     })
 
     socket.on('gcode:unload', () => {
@@ -184,12 +208,47 @@ module.exports = class Autolevel {
       // Append new data to buffer
       this.buffer += data.toString();
 
+      // Check for G54 parameters response: [G54:0.000,0.000,0.000]
+      const g54Match = /\[G54:([\.\+\-\d]+),([\.\+\-\d]+),([\.\+\-\d]+)\]/.exec(this.buffer);
+      if (g54Match) {
+        this.g54Offset = {
+          x: parseFloat(g54Match[1]),
+          y: parseFloat(g54Match[2]),
+          z: parseFloat(g54Match[3])
+        };
+        console.log('DEBUG: Captured G54 offset:', this.g54Offset);
+      }
+
+      // Check for WCO report immediately in the incoming chunk or buffer
+      // Format: <Optionally other stuff|WCO:0.000,10.000,5.000|Optionally other stuff>
+      // or just WCO:x,y,z if parsed from a line.
+      // We check the raw string for resilience against buffer cutting
+      const wcoMatch = /WCO:([\.\+\-\d]+),([\.\+\-\d]+),([\.\+\-\d]+)/.exec(this.buffer);
+      if (wcoMatch) {
+        this.wco = {
+          x: parseFloat(wcoMatch[1]),
+          y: parseFloat(wcoMatch[2]),
+          z: parseFloat(wcoMatch[3])
+        };
+        // console.log('DEBUG: WCO Updated via serial:', this.wco);
+      }
+
       // Process all complete lines in buffer
       // Pattern-based processing (Robust to missing newlines)
       if (this.buffer.length > 5000) {
-        // Keep more context to avoid cutting mid-message
-        console.log('DEBUG: Trimming large buffer to prevent overflow');
-        this.buffer = this.buffer.substring(this.buffer.length - 4000);
+        // Find the first newline after the cut point to ensure we don't slice a message
+        // Keep 4000 chars, so cut at length - 4000
+        const retainLength = 4000;
+        const cutStart = this.buffer.length - retainLength;
+        const newlineIndex = this.buffer.indexOf('\n', cutStart);
+
+        if (newlineIndex !== -1) {
+          this.buffer = this.buffer.substring(newlineIndex + 1);
+        } else {
+          // Fallback if no newline found in the last chunk
+          console.log('DEBUG: Trimming large buffer (no newline found in tail)');
+          this.buffer = this.buffer.substring(cutStart);
+        }
       }
 
       while (true) {
@@ -210,9 +269,21 @@ module.exports = class Autolevel {
         if (prbm) {
           let prb = [parseFloat(prbm[1]), parseFloat(prbm[2]), parseFloat(prbm[3])]
           let pt = {
-            x: prb[0] - this.wco.x,
-            y: prb[1] - this.wco.y,
-            z: prb[2] - this.wco.z
+            x: prb[0], // Placeholder
+            y: prb[1],
+            z: prb[2]
+          }
+
+          // Use G54 offset if available for X/Y/Z, otherwise fallback to WCO
+          // We assume X/Y/Z are constant relative to G54 (since we removed G10 Z-reset).
+          if (this.g54Offset) {
+            pt.x = prb[0] - this.g54Offset.x;
+            pt.y = prb[1] - this.g54Offset.y;
+            pt.z = prb[2] - this.g54Offset.z;
+          } else {
+            pt.x = prb[0] - this.wco.x;
+            pt.y = prb[1] - this.wco.y;
+            pt.z = prb[2] - this.wco.z;
           }
 
           if (this.probeFile) {
@@ -231,8 +302,13 @@ module.exports = class Autolevel {
             }
             this.probedPoints.push(pt)
             this.sckw.sendMessage(`(AL: PROBED ${pt.x} ${pt.y} ${pt.z})`)
+            // Report accurate progress based on ACTUAL probed points
+            this.sckw.sendMessage(`(AL: progress ${this.probedPoints.length} ${this.planedPointCount})`)
 
             console.log('probed ' + this.probedPoints.length + '/' + this.planedPointCount + '>', pt.x.toFixed(3), pt.y.toFixed(3), pt.z.toFixed(3))
+
+            // Trigger next command in Drip Feed
+            this.processQueue();
 
             if (this.probedPoints.length >= this.planedPointCount) {
               console.log('DEBUG: Probing complete. Total points: ' + this.probedPoints.length);
@@ -241,8 +317,8 @@ module.exports = class Autolevel {
                 this.fileClose();
               }
               if (!this.probeOnly) {
-                console.log('DEBUG: Calling applyCompensation...');
-                this.applyCompensation()
+                console.log('DEBUG: Calling applyCompensation (Mesh+Skew)...');
+                this.applyCompensation({ skew: true, mesh: true })
               } else {
                 console.log('DEBUG: Probe Only mode. Finished.');
                 this.sckw.sendMessage('(AL: finished)');
@@ -280,6 +356,28 @@ module.exports = class Autolevel {
       fs.closeSync(this.probeFile);
       this.probeFile = 0;
     }
+  }
+
+  clearMesh() {
+    this.probedPoints = [];
+    this.mesh = null;
+    this.planedPointCount = 0;
+    this.min_dz = 0;
+    this.max_dz = 0;
+    this.sum_dz = 0;
+
+    // Clear the probe file on disk
+    try {
+      if (fs.existsSync(DEFAULT_PROBE_FILE)) {
+        fs.truncateSync(DEFAULT_PROBE_FILE, 0);
+        console.log(`Cleared probe file: ${DEFAULT_PROBE_FILE}`);
+      }
+    } catch (err) {
+      console.error(`Failed to clear probe file: ${err.message}`);
+    }
+
+    this.sckw.sendMessage('(AL: mesh cleared)');
+    console.log('Mesh cleared via command');
   }
 
   dumpMesh() {
@@ -320,11 +418,12 @@ module.exports = class Autolevel {
       this.sckw.sendMessage('(AL: no gcode loaded)')
       return
     }
-    if (this.probedPoints.length < 3) {
-      this.sckw.sendMessage('(AL: no previous autolevel points)')
+    if (this.probedPoints.length < 3 && Math.abs(this.skewAngle) < 1e-6) {
+      this.sckw.sendMessage('(AL: no previous autolevel points or skew)')
       return;
     }
-    this.applyCompensation();
+    // Default reapply behavior: Try both if available
+    this.applyCompensation({ skew: true, mesh: true });
     this.dumpMesh();
   }
 
@@ -341,6 +440,18 @@ module.exports = class Autolevel {
       // If no argument, reset? or report?
       this.sckw.sendMessage(`(AL: Current Skew: ${(this.skewAngle * 180 / Math.PI).toFixed(3)} deg)`);
     }
+    this.saveState();
+  }
+
+  saveState() {
+    try {
+      const state = {
+        skewAngle: this.skewAngle
+      };
+      fs.writeFileSync(STATE_FILE, JSON.stringify(state));
+    } catch (err) {
+      console.error('Error saving autolevel state:', err);
+    }
   }
 
   fetchSettings() {
@@ -354,6 +465,10 @@ module.exports = class Autolevel {
       } else {
         console.log('No settings file found, sending empty object.');
         this.sckw.sendMessage('(AL: SETTINGS {})');
+      }
+      this.sckw.sendMessage(`(AL: Current Skew: ${(this.skewAngle * 180 / Math.PI).toFixed(3)} deg)`);
+      if (this.gcodeFileName) {
+        this.sckw.sendMessage(`(AL: Loaded File: ${this.gcodeFileName})`);
       }
     } catch (err) {
       console.error('Error reading settings file:', err);
@@ -479,13 +594,33 @@ module.exports = class Autolevel {
     // The loop above updates this.wco from controller:state, so we should trust it.
     // However, context.mposx etc might be useful if available.
     // Let's rely on our tracked state if possible.
+    this.sckw.sendMessage('$#');
+
+    // Force a status update to ensure WCO is fresh before we really get going
+    // This is asynchronous, but usually fast enough to beat the probe response.
+    this.sckw.socket.emit('write', this.sckw.port, '?');
+
+    // Attempt to grab WCO from context if available (immediate)
+    if (context && context.status && context.status.wco) {
+      this.wco = context.status.wco;
+      console.log('DEBUG: Initialized WCO from context.status:', this.wco);
+    } else if (context && context.wco) {
+      this.wco = context.wco;
+      console.log('DEBUG: Initialized WCO from context.wco:', this.wco);
+    }
+
 
     // We already have this.wco updated from controller:state
     console.log('Using tracked WCO:', this.wco)
 
     this.probedPoints = []
     this.planedPointCount = 0
-    let code = []
+    this.zZeroOffset = null; // Reset for new run
+    this.probedPoints = []
+    this.planedPointCount = 0
+    this.zZeroOffset = null; // Reset for new run
+    this.commandQueue = []; // Reset queue
+
 
     let xmin, xmax, ymin, ymax;
     if (xSize) {
@@ -527,15 +662,24 @@ module.exports = class Autolevel {
       dx = (xmax - xmin) / parseInt((xmax - xmin) / this.delta)
       dy = (ymax - ymin) / parseInt((ymax - ymin) / this.delta)
     }
-    code.push('(AL: probing initial point)')
-    code.push(`G21`)
-    code.push(`G90`)
-    code.push(`G0 Z${this.height}`)
-    code.push(`G0 X${xmin.toFixed(3)} Y${ymin.toFixed(3)} Z${this.height}`)
-    code.push(`G38.2 Z-${this.height + 1} F${this.feed / 2}`)
-    code.push(`G10 L20 P1 Z0`) // set the z zero
-    code.push(`G0 Z${this.height}`)
+    let setupBlock = [];
+    setupBlock.push('(AL: probing initial point)')
+    setupBlock.push(`G54`) // Ensure we are in Work Coordinate System 1
+    setupBlock.push(`G21`)
+    setupBlock.push(`G90`)
+    setupBlock.push(`G0 Z${this.height}`)
+    let ptInit = { x: xmin, y: ymin, z: this.height };
+    // if (Math.abs(this.skewAngle) > 1e-6) {
+    //   ptInit = this.rotatePoint(ptInit);
+    // }
+    setupBlock.push(`G0 X${ptInit.x.toFixed(3)} Y${ptInit.y.toFixed(3)} Z${ptInit.z.toFixed(3)}`)
+    setupBlock.push(`G38.2 Z-${this.height + 1} F${this.feed / 2}`)
+    // code.push(`G10 L20 P1 Z0`) // REMOVED: Do not reset Z to 0, respect existing WCO
+    setupBlock.push(`G0 Z${this.height}`)
     this.planedPointCount++
+
+    // Push setup block as the first item in the queue
+    this.commandQueue.push(setupBlock.join('\n'));
 
     let y = ymin - dy
     let rowIndex = 0
@@ -560,15 +704,43 @@ module.exports = class Autolevel {
         // don't probe first point twice (it is probed before the loop)
         if (rowIndex === 0 && Math.abs(x - xmin) < 0.001) continue
 
-        code.push(`(AL: probing point ${this.planedPointCount + 1})`)
-        code.push(`G90 G0 X${x.toFixed(3)} Y${y.toFixed(3)} Z${this.height}`)
-        code.push(`G38.2 Z-${this.height + 1} F${this.feed}`)
-        code.push(`G0 Z${this.height}`)
+        let pointBlock = [];
+        // REMOVED predictive comment: code.push(`(AL: probing point ${this.planedPointCount + 1})`)
+        let ptLoop = { x: x, y: y, z: this.height };
+        // if (Math.abs(this.skewAngle) > 1e-6) {
+        //   ptLoop = this.rotatePoint(ptLoop);
+        // }
+        pointBlock.push(`G90 G0 X${ptLoop.x.toFixed(3)} Y${ptLoop.y.toFixed(3)} Z${ptLoop.z.toFixed(3)}`)
+        pointBlock.push(`G38.2 Z-${this.height + 1} F${this.feed}`)
+        pointBlock.push(`G0 Z${this.height}`)
         this.planedPointCount++
+
+        this.commandQueue.push(pointBlock.join('\n'));
       }
       rowIndex++
     }
-    this.sckw.sendGcode(code.join('\n'))
+
+    this.sckw.sendMessage(`(AL: total_points ${this.planedPointCount})`)
+
+    // Start Drip Feed
+    console.log(`Drip Feed: Queue size ${this.commandQueue.length}`);
+    this.processQueue();
+  }
+
+  processQueue() {
+    if (this.commandQueue.length === 0) {
+      console.log("Drip Feed: Queue empty.");
+      return;
+    }
+    const cmd = this.commandQueue.shift();
+    // console.log("Drip Feed: Sending block", cmd); // Verbose
+    this.sckw.sendGcode(cmd);
+  }
+
+  stop() {
+    console.log("Drip Feed: Stop requested. Clearing queue.");
+    this.commandQueue = [];
+    this.sckw.sendMessage('(AL: Drip Feed Stopped)');
   }
 
   updateContext(context) {
@@ -662,7 +834,7 @@ module.exports = class Autolevel {
       y: v.y / dist,
       z: v.z / dist
     } // direction vector
-    let maxSegLength = Units.convert(this.delta, Units.MILLIMETERS, units) / 2
+    let maxSegLength = Units.convert(this.delta, Units.MILLIMETERS, units)
     if (maxSegLength <= 0.001) maxSegLength = 0.5; // Safety check to prevent infinite loop
 
     // res.push({
@@ -872,15 +1044,61 @@ module.exports = class Autolevel {
 
 
 
-  applyCompensation() {
-    this.sckw.sendMessage(`(AL: applying ...)`)
+  applyCompensation(opts = { skew: true, mesh: true }) {
+    if (!this.gcode) {
+      this.sckw.sendMessage('(AL: No G-code loaded. Please load a file first.)');
+      console.log('applyCompensation: No G-code loaded');
+      return;
+    }
+
+    this.sckw.sendMessage(`(AL: applying skew=${opts.skew} mesh=${opts.mesh} ...)`)
 
     console.log('applying compensation ...')
 
+    let originalSkew;
     try {
-      console.log('DEBUG: Initializing Mesh with ' + this.probedPoints.length + ' points');
-      this.mesh = new Mesh(this.probedPoints);
-      console.log('DEBUG: Mesh initialized');
+      if (opts.mesh && this.probedPoints.length >= 3) {
+        // Prevent double application of Mesh
+        if (this.gcodeFileName.includes('#AL:')) {
+          this.sckw.sendMessage('(AL: WARNING: Mesh already applied to this file. Skipping Mesh.)');
+          opts.mesh = false;
+        }
+      }
+
+      if (opts.skew) {
+        if (Math.abs(this.skewAngle) < 1e-6) {
+          this.sckw.sendMessage('(AL: WARNING: Skew requested but angle is 0. No rotation applied.)');
+          // We continue, effectively applying 0 rotation, but we warn.
+        }
+        else if (this.gcodeFileName.includes('#SK:')) {
+          this.sckw.sendMessage('(AL: WARNING: Skew already applied to this file. Skipping Skew.)');
+          opts.skew = false;
+        }
+      }
+
+      this.mesh = null;
+      if (opts.mesh && this.probedPoints.length >= 3) {
+        console.log('DEBUG: Initializing Mesh with ' + this.probedPoints.length + ' points');
+        this.mesh = new Mesh(this.probedPoints);
+        console.log('DEBUG: Mesh initialized');
+      } else {
+        console.log('DEBUG: Mesh application skipped or insufficient points.');
+      }
+
+      console.log(`DEBUG: applyCompensation called with opts:`, opts);
+      console.log(`DEBUG: skewAngle: ${this.skewAngle} (${(this.skewAngle * 180 / Math.PI).toFixed(3)} deg)`);
+      console.log(`DEBUG: gcodeFileName: ${this.gcodeFileName}`);
+
+      // Backup Skew if not applying it
+      originalSkew = this.skewAngle;
+      if (!opts.skew) {
+        console.log('DEBUG: Skew application DISABLED for this run.');
+        this.sckw.sendMessage('(AL: DEBUG: Skew application DISABLED for this run - using temporary 0 angle)');
+        this.skewAngle = 0;
+      } else {
+        console.log('DEBUG: Skew application ENABLED.');
+        this.sckw.sendMessage(`(AL: DEBUG: Skew application ENABLED - Angle: ${(this.skewAngle * 180 / Math.PI).toFixed(3)})`);
+      }
 
       // Calculate Mesh Offset at (0,0) (Work Origin)
       this.meshZeroOffset = 0;
@@ -893,8 +1111,8 @@ module.exports = class Autolevel {
       }
 
       let lines = this.gcode.split('\n')
-      let p0 = { x: 0, y: 0, z: undefined }
-      let p0_initialized = false
+      let p0 = { x: this.pos.x || 0, y: this.pos.y || 0, z: this.pos.z || 0 }
+      let p0_initialized = true
       let pt = { x: 0, y: 0, z: undefined }
 
       // Plane Constants
@@ -1114,10 +1332,31 @@ module.exports = class Autolevel {
         }
       })
 
-      const newgcodeFileName = alFileNamePrefix + this.gcodeFileName;
+      let newPrefix = '';
+      if (opts.mesh && this.mesh) newPrefix += '#AL:';
+
+      // If skew was requested and is valid (non-zero) AND not already applied
+      if (opts.skew && Math.abs(this.skewAngle) > 1e-6 && !this.gcodeFileName.includes('#SK:')) {
+        newPrefix += '#SK:';
+      }
+
+      // If no changes applied, just return? 
+      // User might expect a file reload even if nothing changed? 
+      // Let's at least ensure we don't clear the file name if we didn't do anything.
+      if (newPrefix === '') {
+        this.sckw.sendMessage('(AL: No new compensation applied. Check warnings.)');
+        // We can still proceed to write the file, effectively a copy? Or just stop.
+        // Stopping is safer to avoid confusion.
+        console.log('No compensation flags active or safeguards triggered. Returning.');
+        return;
+      }
+
+      const newgcodeFileName = newPrefix + this.gcodeFileName;
       this.sckw.sendGcode(`(AL: loading new gcode ${newgcodeFileName} ...)`)
       console.log(`AL: loading new gcode ${newgcodeFileName} ...)`)
       const outputGCode = result.join('\n');
+      console.log(`DEBUG: Resulting G-code length: ${outputGCode.length}`);
+
       this.sckw.loadGcode(newgcodeFileName, outputGCode)
       if (this.outDir) {
         const outputFile = this.outDir + "/" + newgcodeFileName;
@@ -1134,6 +1373,11 @@ module.exports = class Autolevel {
       }
       this.sckw.sendGcode(`(AL: error occurred ${errorMsg})`)
       console.log(`error occurred ${x.stack}`)
+    } finally {
+      // Restore Skew Angle
+      if (typeof originalSkew !== 'undefined') {
+        this.skewAngle = originalSkew;
+      }
     }
     console.log('Leveling applied')
   }

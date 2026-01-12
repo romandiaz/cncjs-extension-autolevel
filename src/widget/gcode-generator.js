@@ -123,8 +123,6 @@ G0 Z[safe_z_height]
 %x_center = (x_left + x_right) / 2
 G90
 G0 X[x_center]
-G91
-G0 Z-[safe_z_height]
 
 ; Set Zero X
 G10 L20 P1 X0
