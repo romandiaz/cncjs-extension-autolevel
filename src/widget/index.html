@@ -98,6 +98,33 @@
                         id="probeDepth" value="5.00"></label>
             </div>
         </div>
+        <div class="settings-group">
+            <div
+                style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 3px; margin-bottom: 5px;">
+                <h5 style="border: none; margin: 0; padding: 0;">Tool Change</h5>
+                <label class="switch" title="Show/Hide Tool Change Button">
+                    <input type="checkbox" id="showToolChange" checked>
+                    <span class="slider round"></span>
+                </label>
+            </div>
+            <div class="settings-grid">
+                <label><span>Tool Probe X <i class="fa fa-question-circle tooltip-icon"
+                            data-tooltip="Machine X coordinate of tool probe"></i></span> <input type="number"
+                        id="toolProbeX" value="618.5"></label>
+                <label><span>Tool Probe Y <i class="fa fa-question-circle tooltip-icon"
+                            data-tooltip="Machine Y coordinate of tool probe"></i></span> <input type="number"
+                        id="toolProbeY" value="25"></label>
+                <label><span>Tool Probe Z <i class="fa fa-question-circle tooltip-icon"
+                            data-tooltip="Machine Z height to approach probe"></i></span> <input type="number"
+                        id="toolProbeZ" value="0"></label>
+                <label><span>Safe Z (Mach) <i class="fa fa-question-circle tooltip-icon"
+                            data-tooltip="Machine Z safe travel height"></i></span> <input type="number"
+                        id="safeZMachine" value="0"></label>
+                <label><span>Travel Speed <i class="fa fa-question-circle tooltip-icon"
+                            data-tooltip="Rapid travel speed (G0 replaced by G1 with this speed)"></i></span> <input
+                        type="number" id="travelSpeed" value="500"></label>
+            </div>
+        </div>
     </div>
 
     <!-- Autolevel Tab Content -->
@@ -181,6 +208,19 @@
                     <div>Position probe at the left-most point of the front edge. The machine will probe Y, move X+, and
                         probe Y again to calculate angle.</div>
                 </div>
+                <div id="tab-tool-change" class="tab-content">
+                    <img src="img/change tool.png" alt="Tool Change" class="instruction-img">
+                    <div style="text-align: left; display: inline-block;">
+                        <strong>Tool Change Sequence</strong><br>
+                        1. Moves to Tool Probe Location.<br>
+                        2. Probes CURRENT tool length.<br>
+                        3. Pauses for manual tool change.<br>
+                        4. Probes NEW tool length.<br>
+                        5. Updates Z offset to match original tool.<br>
+                        <br>
+                        <strong style="color: #d9534f;">WARNING: Ensure tool setter is in place!</strong>
+                    </div>
+                </div>
             </div>
             <div id="tab-clear-skew-confirm" class="tab-content">
                 <i class="fa fa-ban" style="font-size: 64px; margin: 20px; color: #d9534f;"></i>
@@ -210,10 +250,11 @@
             </div>
 
             <div id="tab-autolevel-confirm" class="tab-content">
-                <i class="fa fa-th" style="font-size: 64px; margin: 20px; color: #555;"></i>
+                <img src="img/instruction corner.png" alt="Surface Map Probe" class="instruction-img">
+                <div>Position the probe above the front-left corner of the mapping area. The machine will probe
+                    the surface according to your "Probing" settings.<br><br></div>
                 <div><strong>Start Surface Mapping?</strong><br><strong>Warning:</strong> This will delete any existing
-                    mesh data.<br><br>The machine will probe the
-                    surface according to your "Probing" settings.</div>
+                    mesh data.</div>
             </div>
             <div id="tab-apply-skew-manual" class="tab-content">
                 <i class="fa fa-random" style="font-size: 64px; margin: 20px; color: #555;"></i>
@@ -271,6 +312,9 @@
             <button disabled onclick="run('corner', 'BR')"><span class="icon">┘</span></button>
             <button disabled class="btn-shape" onclick="run('pocket', 'circle')"><i class="fa fa-circle-o"></i>
                 Hole</button>
+            <button disabled class="btn-shape" onclick="run('tool_change')" style="grid-column: span 4;"><i
+                    class="fa fa-exchange"></i>
+                Tool Change</button>
         </div>
     </div>
 

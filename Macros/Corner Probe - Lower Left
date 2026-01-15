@@ -1,0 +1,49 @@
+// --- PROBE SPECS ---
+%physical_diam  = 1.92;  // Your exact tip diameter
+%deflection     = 0.26;   // The "Yaw" or pre-travel (Update this after testing!)
+
+// --- MOVEMENT SETTINGS ---
+%fast_speed     = 100;   // Slowed down slightly for the smaller 1.92mm tip
+%slow_speed     = 25;    // Precision speed
+%retract        = 1.0;   // Retract distance
+%max_travel     = 25.0;  // Safety search limit
+
+// --- AUTOMATIC MATH (Do not edit) ---
+// Effective Radius = Physical Radius - Deflection
+// We use this "smaller" radius because the probe travels *inside* the zone before triggering.
+%effective_rad  = ([physical_diam] / 2) - [deflection]; 
+
+G91                        ; Relative Positioning
+
+; --- FIND Z SURFACE ---
+G38.2 Z-[max_travel] F[fast_speed]
+G0 Z[retract]
+G38.2 Z-5 F[slow_speed]
+G10 L20 P1 Z0              ; Set Z Zero (Top)
+G0 Z[retract + 2]          ; Lift safe
+
+; --- FIND X EDGE (Left Side) ---
+G0 X-[max_travel]           ; Move Right
+G0 Z-5                     ; Drop down
+G38.2 X[max_travel] F[fast_speed]
+G0 X-[retract]
+G38.2 X2 F[slow_speed]
+; Set X Zero using EFFECTIVE radius
+G10 L20 P1 X-[effective_rad] 
+G0 X-[retract]
+
+; --- FIND Y EDGE (Front Side) ---
+G0 Z5                      ; Lift
+G0 X[max_travel]          ; Move Left
+G0 Y-[max_travel]           ; Move Y Forward
+G0 Z-5                     ; Drop down
+G38.2 Y[max_travel] F[fast_speed]
+G0 Y-[retract]
+G38.2 Y2 F[slow_speed]
+; Set Y Zero using EFFECTIVE radius
+G10 L20 P1 Y-[effective_rad]
+G0 Y-[retract]
+
+G0 Z20                     ; Lift to Safe Z
+G90                        ; Absolute Mode
+G0 X0 Y0 Z5 ;

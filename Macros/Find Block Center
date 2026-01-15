@@ -1,0 +1,48 @@
+%approx_width = 50; //APPROXIMATE WIDTH OF STOCK
+
+// --- PROBE SPECS ---
+%physical_diam  = 1.92;  // Your exact tip diameter
+%deflection     = 0.36;   // The "Yaw" or pre-travel (Update this after testing!)
+
+// --- MOVEMENT SETTINGS ---
+%fast_speed     = 100;   // Slowed down slightly for the smaller 1.92mm tip
+%slow_speed     = 25;    // Precision speed
+%retract        = 1.0;   // Retract distance
+%max_travel     = 25.0;  // Safety search limit
+%safe_z_height  = 20.0;  // Height to hop over the block
+
+// --- AUTOMATIC MATH (Do not edit) ---
+// Effective Radius = Physical Radius - Deflection
+// We use this "smaller" radius because the probe travels *inside* the zone before triggering.
+%effective_rad  = ([physical_diam] / 2) - [deflection]; 
+
+G91                        ; Relative Mode
+
+; --- 1. FIND LEFT WALL ---
+G38.2 X[max_travel] F[fast_speed] ; Probe Right to find Left Wall
+G0 X-[retract]             ; Back off
+G38.2 X[max_travel] F[slow_speed] ; Probe Right to find Left Wall
+%x_left = posx               ; Store Left Wall Hit
+G0 X-[retract]             ; Back off
+G0 Z[safe_z_height]        ; Lift Z to clear the material
+
+; --- 2. HOP TO RIGHT SIDE ---
+; Move X by approximate width + extra clearance
+G0 X[approx_width + 10]    
+G0 Z-[safe_z_height]       ; Drop back down
+
+; --- 3. FIND RIGHT WALL ---
+G38.2 X-[max_travel] F[fast_speed] ; Probe Left to find Right Wall
+G0 X[retract]              ; Back off
+G38.2 X-[max_travel] F[slow_speed] ; Probe Left to find Right Wall
+%x_right = posx               ; Store Right Wall Hit
+G0 X[retract]              ; Back off
+G0 Z[safe_z_height]        ; Lift safe
+
+; --- 4. CALCULATE CENTER ---
+; Formula: (LeftHit + RightHit) / 2
+%stock_coord = x_left + x_right;
+%stock_center =  stock_coord / 2;
+
+G90                        ; Absolute Mode
+G0 X[stock_center]                 ; Move to X Center

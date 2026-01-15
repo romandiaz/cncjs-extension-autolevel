@@ -42,6 +42,13 @@
         plateThickness: 15,
         probeSpacing: 50,
         probeDepth: 5,
+        // Tool Change
+        toolProbeX: 618.5,
+        toolProbeY: 25,
+        toolProbeZ: 0,
+        safeZMachine: 0, // Default to slightly below limit? Or 0? G53 Z0 is usually safe height.
+        travelSpeed: 500,
+        showToolChange: true,
         // UI State
         activeTab: 'autolevel'
     };
@@ -93,12 +100,27 @@
             'feedSlow': settings.feedSlow,
             'feedFast': settings.feedFast,
             'plateThickness': settings.plateThickness,
-            'probeSpacing': settings.probeSpacing
+            'feedFast': settings.feedFast,
+            'plateThickness': settings.plateThickness,
+            'probeSpacing': settings.probeSpacing,
+            'probeDepth': settings.probeDepth,
+            'toolProbeX': settings.toolProbeX,
+            'toolProbeY': settings.toolProbeY,
+            'toolProbeZ': settings.toolProbeZ,
+            'safeZMachine': settings.safeZMachine,
+            'travelSpeed': settings.travelSpeed
         };
 
         for (const [id, val] of Object.entries(mapping)) {
             const el = document.getElementById(id);
             if (el) el.value = val;
+        }
+
+        // Restore Checkbox
+        const elShowTool = document.getElementById('showToolChange');
+        if (elShowTool) {
+            elShowTool.checked = settings.showToolChange;
+            toggleToolChangeBtn(settings.showToolChange);
         }
 
         // Restore Active Tab
@@ -129,19 +151,38 @@
         updateButtonState(socket && controllerPort);
     }
 
+    function toggleToolChangeBtn(show) {
+        // Find the button with onclick="run('tool_change')"
+        // It resides in .probe-grid
+        // We can find it by attribute or class if we add one.
+        // It has style="grid-column: span 4;" in HTML, let's use a selector
+        const btn = document.querySelector('.probe-grid button[onclick*="tool_change"]');
+        if (btn) {
+            btn.style.display = show ? 'flex' : 'none'; // Flex because these buttons are flex in CSS
+        }
+    }
+
     function saveSettings() {
         // Capture Input Values
         const ids = [
             'height', 'margin', 'grid',
             'probeDia', 'sizeX', 'sizeY', 'probeDeflection',
             'retract', 'maxTravel', 'safeZ',
-            'feedSlow', 'feedFast', 'plateThickness', 'probeSpacing', 'probeDepth'
+            'feedSlow', 'feedFast', 'plateThickness', 'probeSpacing', 'probeDepth',
+            'toolProbeX', 'toolProbeY', 'toolProbeZ', 'safeZMachine', 'travelSpeed'
         ];
 
         ids.forEach(id => {
             const el = document.getElementById(id);
             if (el) settings[id] = parseFloat(el.value);
         });
+
+        // Capture Checkbox
+        const elShowTool = document.getElementById('showToolChange');
+        if (elShowTool) {
+            settings.showToolChange = elShowTool.checked;
+            toggleToolChangeBtn(settings.showToolChange); // Update immediately
+        }
 
         console.log("Saving settings to server:", settings);
         // Send to server
@@ -1215,7 +1256,14 @@
         else if (type === 'skew') {
             probeTitle = "Measure Skew (Y Front)";
             // Initial dummy GCode, will be dynamically generated/managed
+            // Initial dummy GCode, will be dynamically generated/managed
             g = "(skew_start)";
+        }
+        if (type === 'tool_change') {
+            probeTitle = "Tool Change & Probe";
+            g = window.GCodeGenerator.generateToolChangeProbe(params);
+            modalManager.confirmProbe(g, type, probeTitle, "Change Tool");
+            return;
         }
 
 
@@ -1232,7 +1280,8 @@
 
     // Persistence for Probing
     const PROBE_SETTINGS_KEY = 'probe_widget_settings_v1';
-    const PROBE_INPUT_IDS = ['probeDia', 'probeDeflection', 'retract', 'maxTravel', 'safeZ', 'sizeX', 'sizeY', 'feedSlow', 'feedFast', 'plateThickness', 'probeDepth'];
+    const PROBE_INPUT_IDS = ['probeDia', 'probeDeflection', 'retract', 'maxTravel', 'safeZ', 'sizeX', 'sizeY', 'feedSlow', 'feedFast', 'plateThickness', 'probeDepth',
+        'toolProbeX', 'toolProbeY', 'toolProbeZ', 'safeZMachine', 'travelSpeed'];
 
     function saveProbeSettings() {
         const settings = {};
@@ -1266,6 +1315,12 @@
             el.addEventListener('input', saveProbeSettings);
         }
     });
+
+    // Tool Change Toggle Persistence
+    const elShowTool = document.getElementById('showToolChange');
+    if (elShowTool) {
+        elShowTool.addEventListener('change', saveSettings);
+    }
 
     // Load Probing Settings
     loadProbeSettings();

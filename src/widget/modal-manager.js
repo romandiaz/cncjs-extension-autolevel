@@ -60,6 +60,7 @@ class ModalManager {
                 .al-modal-body img {
                     max-height: 200px;
                     width: auto;
+                    max-width: 100%;
                     margin: 0 auto 10px auto;
                     display: block;
                     border: 1px solid #eee;
@@ -148,7 +149,9 @@ class ModalManager {
         if (type === 'apply-skew-manual') tabId = 'tab-apply-skew-manual';
         if (type === 'apply-mesh-manual') tabId = 'tab-apply-mesh-manual';
         if (type === 'clear-mesh-confirm') tabId = 'tab-clear-mesh-confirm';
+        if (type === 'clear-mesh-confirm') tabId = 'tab-clear-mesh-confirm';
         if (type === 'clear-skew-confirm') tabId = 'tab-clear-skew-confirm';
+        if (type === 'tool_change') tabId = 'tab-tool-change';
 
         const sourceEl = document.getElementById(tabId);
         if (!sourceEl) {

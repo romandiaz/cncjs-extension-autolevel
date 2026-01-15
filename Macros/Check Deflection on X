@@ -1,0 +1,52 @@
+; This macro will help you calibrate your deflection on the X axis.
+; You still need to apply the formula (current X - actual workpiece width - probe diameter) / 2 to calculate deflection.
+// --- CALIBRATION SETTINGS ---
+%block_width    = 50.7;  // ENTER EXACT WIDTH OF YOUR BLOCK HERE
+%probe_diam     = 1.92;  // Your probe diameter
+%fast_speed     = 100;
+%slow_speed     = 25;
+%retract        = 2.0;
+%max_travel     = 25.0;
+%safe_z         = 25.0;  // Height to hop over the block
+
+(MSG, --- STEP 1: Position Probe on LEFT side ---)
+(MSG, Click Resume to start probing...)
+M0 ; Pause for user check
+
+G91                        ; Relative Mode
+
+; --- PROBE LEFT SIDE ---
+G38.2 X[max_travel] F[fast_speed] ; Fast Probe Right
+G0 X-[retract]             ; Retract
+G38.2 X[retract+1] F[slow_speed] ; Slow Probe Right to Hit
+; !!! IMPORTANT: We Zero X here !!!
+; This makes X1 = 0. So X2 will be our total distance.
+G10 L20 P1 X0 
+
+G0 X-[retract]             ; Back off
+G0 Z[safe_z]               ; Lift Z high
+
+; --- HOP TO RIGHT SIDE ---
+; Move X by block width + extra clearance
+G0 X[block_width + 10]    
+G0 Z-[safe_z]              ; Drop back down
+
+(MSG, --- STEP 2: Ready to probe RIGHT side ---)
+(MSG, Ensure path is clear. Resuming...)
+; Optional M0 here if you want to double check position
+; M0 
+
+; --- PROBE RIGHT SIDE ---
+G38.2 X-[max_travel] F[fast_speed] ; Fast Probe Left
+G0 X[retract]              ; Retract
+G38.2 X-[retract+1] F[slow_speed] ; Slow Probe Left to Hit
+
+; --- FINISH & DISPLAY ---
+; The machine is now stopped exactly at the trigger point.
+; DO NOT MOVE THE MACHINE YET.
+;Use the formula (current X - actual workpiece width - probe diameter) / 2 to calculate deflection.
+M0 ; Pause indefinitely so you can read the number
+
+G0 X[retract]              ; Back off after you hit resume
+G0 Z[safe_z]               ; Safe Z
+G90                        ; Absolute Mode
