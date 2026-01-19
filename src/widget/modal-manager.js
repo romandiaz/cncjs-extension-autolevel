@@ -225,7 +225,7 @@ class ModalManager {
                 if (type === 'skew') {
                     const spacing = parseFloat(overlay.dataset.spacing || "50");
                     if (this.startSkewProbe) this.startSkewProbe(spacing);
-                    overlay.remove();
+                    this.transitionToSkewProbe(overlay);
                 } else if (type === 'skew-result') {
                     // Just run the pending GCode (which is the apply text)
                     if (this.sendGcode && this.pendingGcode) this.sendGcode(this.pendingGcode);
@@ -485,11 +485,80 @@ class ModalManager {
         }
     }
 
+    transitionToSkewProbe(overlay) {
+        const body = overlay.querySelector('.al-modal-body');
+        const footer = overlay.querySelector('.al-modal-footer');
+        const header = overlay.querySelector('.al-modal-header');
+
+        if (header) header.innerText = "Measuring Skew...";
+
+        // Simple status display
+        body.innerHTML = `
+            <div style="margin: 20px 0; font-size: 16px;">
+                <i class="fa fa-spinner fa-spin" style="font-size: 24px; margin-right: 10px;"></i>
+                <span id="al-skew-status">Initializing...</span>
+            </div>
+            <div style="font-size: 12px; color: #777;">Please wait while the machine probes two points.</div>
+        `;
+
+        // Footer with Stop button
+        footer.innerHTML = '';
+        const btnStop = document.createElement('button');
+        btnStop.className = 'al-btn al-btn-danger';
+        btnStop.innerText = 'Stop';
+        btnStop.onclick = () => {
+            if (this.onStop) this.onStop();
+            overlay.remove();
+        };
+        footer.appendChild(btnStop);
+    }
+
+    transitionToSkewProbeLocal() {
+        const header = document.querySelector('#confirmModal .modal-header');
+        const body = document.getElementById('confirmBody');
+        const btn = document.getElementById('btnConfirmRun');
+
+        if (header) header.innerText = "Measuring Skew...";
+        if (body) {
+            body.innerHTML = `
+            <div style="text-align: center; padding: 20px;">
+                <i class="fa fa-spinner fa-spin" style="font-size: 24px; margin-bottom: 15px;"></i>
+                <div id="local-skew-status" style="font-weight: bold;">Initializing...</div>
+                <div style="margin-top: 10px; color: #777;">Please wait...</div>
+            </div>`;
+        }
+
+        if (btn) {
+            btn.innerText = "Stop";
+            btn.classList.add('btn-danger');
+            btn.classList.remove('primary');
+            // Re-bind to stop
+            const newBtn = btn.cloneNode(true);
+            btn.parentNode.replaceChild(newBtn, btn);
+            newBtn.addEventListener('click', () => {
+                if (this.onStop) this.onStop();
+                this.close();
+            });
+        }
+    }
+
+    updateSkewStatus(message) {
+        // Parent Overlay
+        if (this.canAccessParent()) {
+            const msgEl = window.parent.document.getElementById('al-skew-status');
+            if (msgEl) msgEl.innerText = message;
+        }
+
+        // Local Modal
+        const localEl = document.getElementById('local-skew-status');
+        if (localEl) localEl.innerText = message;
+    }
+
     // Called from Main Controller to execute local run
     runLocal() {
         if (this.pendingGcode === '(skew_start)') {
             if (this.startSkewProbe) this.startSkewProbe(this.skewSpacing);
-            this.close();
+            this.transitionToSkewProbeLocal();
         } else if (this.pendingGcode) {
             if (this.sendGcode) this.sendGcode(this.pendingGcode);
             this.close();

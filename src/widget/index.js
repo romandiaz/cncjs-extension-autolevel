@@ -767,6 +767,7 @@
 
         sendGcode(g);
         statusText.innerText = "Skew: Probing Point 1...";
+        modalManager.updateSkewStatus("Probing Point 1...");
     }
 
     function processSkewProbe(line) {
@@ -813,6 +814,7 @@
 
             sendGcode(g);
             statusText.innerText = "Skew: Moving to Point 2...";
+            modalManager.updateSkewStatus("Moving to Point 2...");
         }
         else if (skewState.step === 2) {
             // Wait for 2nd probe (Slow probe)
@@ -1193,6 +1195,7 @@
             }
             statusText.innerText = "Stopping... (Finishing current move)";
             autolevelState.active = false;
+            skewState.active = false;
         }
     });
 
