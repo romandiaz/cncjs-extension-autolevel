@@ -1,5 +1,3 @@
-![Autolevel Header](doc/autolevel_header.png)
-
 # CNCjs Autolevel Extension
 
 The **CNCjs Autolevel Extension** provides advanced auto-leveling and PCB correction capabilities for CNCjs. Designed primarily for PCB isolation milling, it combines a backend extension with a rich frontend widget to helps you achieve perfect engraving depths on uneven surfaces.
