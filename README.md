@@ -18,6 +18,7 @@ The **Probing Tab** contains buttons that initiate advanced probing sequences an
 
 ### 5. Configuration Settings
 The **Configuration menu** allows you to fine-tune the probing behavior. You can adjust the feed rates for the probing sequences, set the height of the touch plate (if using one), and define the safe Z height for the probing sequences.
+
 ---
 
 ## Installation
