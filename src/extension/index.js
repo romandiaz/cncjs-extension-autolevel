@@ -177,7 +177,7 @@ socket.on('serialport:open', function (options) {
   options = options || {}
 
   console.log('Connected to port "' + options.port + '" (Baud rate: ' + options.baudrate + ')')
-  socket.emit('command', options.port, 'gcode', '(AL: connected)');
+  socket.emit('write', options.port, '(AL: connected)\n');
   callback(null, socket)
 })
 

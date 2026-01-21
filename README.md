@@ -13,9 +13,11 @@ No need to align your PCB perfectly parallel to the axis. The **Skew Compensatio
 ### 3. Interactive Visualizer
 A real-time 3D visualizer displays the probed surface topology, giving you immediate feedback on the board's flatness. It also shows the tool path relative to the mesh, so you can verify corrections before cutting.
 
-### 4. Smart G-code Modification
-The extension processes your G-code and injects Z-axis adjustments based on the surface map. It supports both automatic grid-based probing (based on G-code bounds) and manual area definition.
+### 4. Probing Sequences
+The **Probing Tab** contains buttons that initiate advanced probing sequences and procedures to set the zero point for your stock.
 
+### 5. Configuration Settings
+The **Configuration menu** allows you to fine-tune the probing behavior. You can adjust the feed rates for the probing sequences, set the height of the touch plate (if using one), and define the safe Z height for the probing sequences.
 ---
 
 ## Installation
@@ -53,9 +55,15 @@ The widget must be loaded into the CNCjs interface. You can either **mount** it 
 #### Option A: Mounting (Recommended for Local Use)
 Restart CNCjs with the `--mount` flag:
 ```bash
-cncjs --mount /widget:/path/to/cncjs-extension-autolevel/src/widget
+cncjs --mount /widget:/home/pi/cncjs-extension-autolevel/src/widget
 ```
-*Replace `/path/to/...` with the absolute path to the repository.*
+*Replace `/home/pi/...` with the absolute path to the repository.*
+
+**Using PM2:**
+```bash
+pm2 start $(which cncjs) -- --port 8000 -m /widget:/home/pi/cncjs-extension-autolevel/src/widget
+```
+*Run 'pm2 delete cncjs' first, if you have already set up cncjs with pm2*
 
 #### Option B: Serving (Remote Access)
 If you run CNCjs on a different machine (e.g., Raspberry Pi), serve the widget folder via HTTP:
@@ -75,6 +83,8 @@ Follow this typical workflow to mill a PCB with auto-leveling:
 1.  **Connect**: Open CNCjs and ensure the Autolevel widget shows "Connected".
 2.  **Home**: Home your machine (`$H`).
 3.  **Zero**: Jog to your workpiece origin (X/Y/Z) and zero the coordinates.
+    > [!TIP]
+    > **Pro Tip:** Use the probe to set your Initial Zero point for maximum accuracy.
 
 ### 2. Skew Correction (Optional)
 If your board isn't perfectly straight:
@@ -129,7 +139,7 @@ The **Settings** tab allows you to fine-tune the probing behavior.
 ---
 
 ## Macros
-Advanced users can control the extension via G-code:
+Advanced users can control the extension via G-code commands. These can be entered directly into the CNCjs Console or saved as **Custom Macros** in the CNCjs interface for one-click access:
 *   `(#autolevel)`: Start probing based on loaded G-code.
 *   `(#autolevel_skew)`: Initiate skew probing.
 *   `(#autolevel_apply_mesh)`: Apply the current mesh to the loaded file.

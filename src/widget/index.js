@@ -426,9 +426,24 @@
         }
 
         if (socket && controllerPort) {
-            // CNCjs 1.9.x API: socket.emit('command', port, type, data)
-            socket.emit('command', controllerPort, 'gcode', cmd);
-            console.log("Sent GCode via Socket.IO:", cmd);
+            // Check if this is a "Control" command that should bypass the G-code buffer (e.g. while in Alarm/Hold)
+            if (cmd.startsWith('(autolevel_') && !cmd.includes('apply')) {
+                // EXCEPTION: Apply commands might need to be synchronous if we wanted them queue-ordered,
+                // but usually we want them to just set state.
+                // However, fetching settings, skew, dumping mesh, clearing mesh are safe to run anytime.
+                // Let's whitelist the ones we KNOW cause hanging issues on startup:
+                // fetch_settings, skew, get_mesh
+
+                // Let's just use 'write' for ALL (autolevel_*) commands except maybe things that move?
+                // None of the autolevel_ commands cause motion directly via the controller (they trigger internal extension logic).
+                // So safe to send all via write.
+                socket.emit('write', controllerPort, cmd + '\n');
+                console.log("Sent Control Cmd via Serial Write:", cmd);
+            } else {
+                // CNCjs 1.9.x API: socket.emit('command', port, type, data)
+                socket.emit('command', controllerPort, 'gcode', cmd);
+                console.log("Sent GCode via Socket.IO:", cmd);
+            }
         } else {
             console.warn("Cannot send GCode: Socket or Port not ready.", { socket: !!socket, port: controllerPort });
 
