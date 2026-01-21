@@ -37,9 +37,9 @@ The extension runs as a separate Node.js process that communicates with CNCjs.
 3.  **Start the extension (using PM2)**:
     It is recommended to use PM2 to manage the extension process alongside CNCjs.
 
-    1.  Edit `pm2.config.js` to match your ecosystem (e.g., update the `script` path or add `--port` args).
+    1.  Edit `pm2.example.config.js` to match your ecosystem (e.g., update the `script` path or add `--port` args).
 
-    2.  Copy the example config:
+    2.  Copy/rename the example config:
         ```bash
         cp pm2.example.config.js pm2.config.js
         ```
