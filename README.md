@@ -54,20 +54,20 @@ The extension runs as a separate Node.js process that communicates with CNCjs.
 ### 2. Widget (Frontend)
 The widget must be loaded into the CNCjs interface. You can either **mount** it (local) or **serve** it (network).
 
-#### Option A: Mounting (Recommended for Local Use)
+#### Option A: Using PM2 (Recommended for Local Use)
+```bash
+pm2 start $(which cncjs) -- --port 8000 -m /widget:/home/pi/cncjs-extension-autolevel/src/widget
+```
+*Run 'pm2 delete cncjs' first, if you have already set up cncjs with pm2*
+
+#### Option B: Mounting TO CNCjs
 Restart CNCjs with the `--mount` flag:
 ```bash
 cncjs --mount /widget:/home/pi/cncjs-extension-autolevel/src/widget
 ```
 *Replace `/home/pi/...` with the absolute path to the repository.*
 
-**Using PM2:**
-```bash
-pm2 start $(which cncjs) -- --port 8000 -m /widget:/home/pi/cncjs-extension-autolevel/src/widget
-```
-*Run 'pm2 delete cncjs' first, if you have already set up cncjs with pm2*
-
-#### Option B: Serving (Remote Access)
+#### Option C: Serving (Remote Access)
 If you run CNCjs on a different machine (e.g., Raspberry Pi), serve the widget folder via HTTP:
 ```bash
 cd src/widget
@@ -127,7 +127,7 @@ The **Settings** tab allows you to fine-tune the probing behavior.
 | **Safe Z** | Absolute Z height for rapid moves between points. | `5 - 20` mm |
 | **Max Depth** | Maximum distance to search for the surface before alarming. | `10` mm |
 | **Probe Spacing** | X-distance between points for Skew detection. | `50` mm |
-| **Margin** | Extra boundary added around the G-code bounding box for the mesh grid. | `2` mm |
+| **Margin** | Extra boundary added within the G-code bounding box for the mesh grid. **Be aware** that gcode can extend beyond the bounds of the stock, requiring a larger margin. | `2 - 10` mm |
 
 ---
 
@@ -135,7 +135,7 @@ The **Settings** tab allows you to fine-tune the probing behavior.
 
 *   **"Socket Disconnected"**: The widget cannot talk to the extension. Check if the `node src/extension/index.js` process is running.
 *   **Probing stops/fails**: Ensure your probe wires are secure and the electrical connection is good. Check console logs for "Alarm" states.
-*   **Visualizer empty**: Click "Get Mesh" or refresh the page to re-sync the mesh data from the server.
+*   **Visualizer empty**: Click "Probe New Mesh" or refresh the page to re-sync the mesh data from the server.
 *   **Permissions (Linux)**: Ensure your user is in the `dialout` group to access serial ports.
 
 ---
