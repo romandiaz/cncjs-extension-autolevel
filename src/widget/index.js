@@ -1173,9 +1173,21 @@
         const fast = getProbeVal('feedFast');
         const slow = getProbeVal('feedSlow');
         const plateThickness = getProbeVal('plateThickness');
+
+        // Tool Change Params
+        const toolProbeX = getProbeVal('toolProbeX');
+        const toolProbeY = getProbeVal('toolProbeY');
+        const toolProbeZ = getProbeVal('toolProbeZ');
+        const safeZMachine = getProbeVal('safeZMachine');
+        const travelSpeed = getProbeVal('travelSpeed');
+
         const r = (dia / 2) - deflect;
 
-        return { dia, deflect, ret, maxTravel, safeZ, sizeX, sizeY, spacing, probeDepth, fast, slow, plateThickness, r };
+        return {
+            dia, deflect, ret, maxTravel, safeZ, sizeX, sizeY, spacing,
+            probeDepth, fast, slow, plateThickness, r,
+            toolProbeX, toolProbeY, toolProbeZ, safeZMachine, travelSpeed
+        };
     }
 
     // --- MODAL MANAGER ---

@@ -269,109 +269,91 @@ G0 X0 Y0
     generateToolChangeProbe: function (params) {
         const {
             toolProbeX, toolProbeY, toolProbeZ, safeZMachine,
-            travelSpeed, feedFast, feedSlow, maxTravel, ret
+            travelSpeed, fast, slow, maxTravel, ret
         } = params;
 
         // Note: Using %variables to make the G-code easier to read/debug in the confirmation window
         return `
 ; Tool Change & Probe
-%SAFE_HEIGHT_MACH = ${safeZMachine}
-%TOOL_PROBE_X_MACH = ${toolProbeX}
-%TOOL_PROBE_Y_MACH = ${toolProbeY}
-%TOOL_PROBE_Z_MACH = ${toolProbeZ}
-%PROBE_DISTANCE = ${maxTravel}
-%PROBE_FAST_FEEDRATE = ${feedFast}
-%PROBE_SLOW_FEEDRATE = ${feedSlow}
+%SAFE_HEIGHT = ${safeZMachine}
+%TOOL_PROBE_X = ${toolProbeX}
+%TOOL_PROBE_Y = ${toolProbeY}
+%TOOL_PROBE_Z = ${toolProbeZ}
+%PROBE_DISTANCE = 50
+%PROBE_FAST_FEEDRATE = ${fast}
+%PROBE_SLOW_FEEDRATE = ${slow}
 %TRAVEL_SPEED = ${travelSpeed}
+%H_TRAVEL_SPEED = ${travelSpeed}
 %RETRACT = ${ret}
 
-; Keep a backup of current work position (Not fully supported in standard grbl macros, 
-; but typically variables are local or we rely on G54 restoration)
-; We will use G53 for movements to probe, and restore with G0 in G54.
+; Keep a backup of current work position
+%X0=posx
+%Y0=posy
+%Z0=posz
 
 M5 ; Stop spindle
 G21 ; Metric
 G90 ; Absolute
 
 ; 1. Move to Safe Z (Machine Coords)
-G53 G0 Z[SAFE_HEIGHT_MACH]
+G53 G0 Z[SAFE_HEIGHT] F[TRAVEL_SPEED]
 
 ; 2. Move to Tool Probe Location (Machine Coords)
-G53 G0 X[TOOL_PROBE_X_MACH] Y[TOOL_PROBE_Y_MACH]
+G53 G0 X[TOOL_PROBE_X] Y[TOOL_PROBE_Y] F[H_TRAVEL_SPEED]
 
 ; 3. Initial Tool Probe
-; Move down to probe approach height
-G53 G0 Z[TOOL_PROBE_Z_MACH]
+M0 (Make sure probe is there)
 
-; Probe (G38.2 requires relative or absolute? It works in current mode. We should be in G91 for relative probe usually to be safe with unknown Z)
+G53 G0 Z[TOOL_PROBE_Z] F[TRAVEL_SPEED]
+
 G91
 G38.2 Z-[PROBE_DISTANCE] F[PROBE_FAST_FEEDRATE]
 G0 Z[RETRACT]
 G38.2 Z-[RETRACT + 2] F[PROBE_SLOW_FEEDRATE]
-; Store current Z (Machine Z at trigger)
-%ORIGINAL_TOOL_Z = posz
 
+G90
+%wait
+G4 P0 ; work around cncjs sending 1 command ahead
+
+%ORIGINAL_TOOL = posz
+
+G91
 G0 Z5
 G90
-
-; Move back to Safe Z
-G53 G0 Z[SAFE_HEIGHT_MACH]
+G53 G0 Z[SAFE_HEIGHT] F[TRAVEL_SPEED]
 
 ; 4. Manual Tool Change
 M0 (Change tool now)
 
 ; 5. Probe New Tool
-; Ensure we differ in X/Y/Z? No, we are still at Safe Z, X/Y of probe.
-G53 G0 X[TOOL_PROBE_X_MACH] Y[TOOL_PROBE_Y_MACH]
-G53 G0 Z[TOOL_PROBE_Z_MACH]
+; Ensure we are at probe location
+G90
+G53 G0 X[TOOL_PROBE_X] Y[TOOL_PROBE_Y] F[H_TRAVEL_SPEED]
+G53 G0 Z[TOOL_PROBE_Z] F[TRAVEL_SPEED]
 
 G91
 G38.2 Z-[PROBE_DISTANCE] F[PROBE_FAST_FEEDRATE]
 G0 Z[RETRACT]
 G38.2 Z-[RETRACT + 2] F[PROBE_SLOW_FEEDRATE]
-%NEW_TOOL_Z = posz
 
 G90
+%wait
+G4 P0 ; work around cncjs sending 1 command ahead
+
+%NEW_TOOL_Z = posz
 
 ; 6. Apply Offset
-; The difference in Z is (NEW_TOOL_Z - ORIGINAL_TOOL_Z).
-; If new tool is longer (lower Z trigger), difference is negative? 
-; No, Z trigger is higher if tool is longer. 
-; If original = -10, new = -5 (longer tool), diff = +5.
-; We want to adjust G54 Z offset so that the Z0 remains true relative to the workpiece.
-; Actually simpler: G92 or G43.1?
-; Standard method: G10 L20 P1 Z... ?
-; If we are at the touch plate current trigger height, that physical height IS the same as it was for the old tool.
-; But G54 Z is relative to that.
-; The simplest logic used in the provided file:
-; "G92 Z[ORIGINAL_TOOL]"
-; This sets the CURRENT position to be the logical Z of the original tool.
-; Since we are physically at the SAME sensor height, saying "We are at Z_ORIG" effectively updates the offset.
-; However, %ORIGINAL_TOOL_Z captured 'posz' which is Machine Z? 
-; If 'posz' returns machine Z in the macro system this widget uses (which seems to be cncjs macro evaluation?), 
-; then G92 Z[posz] would set Work Z to Machine Z, which is wrong.
-; Wait, the original G-code said:
-; %ORIGINAL_TOOL = posz
-; ...
-; G92 Z[ORIGINAL_TOOL]
-; IF 'posz' is work coordinate Z, then this works perfectly.
-; In cncjs macros, 'posz' is usually work position Z. 'mposz' is machine.
-; So we assume 'posz' is Work Z.
-
-G92 Z[ORIGINAL_TOOL_Z]
+; Update Z offset for new tool to be that of original tool
+G92 Z[ORIGINAL_TOOL]
 
 G91
 G0 Z5
 G90
-G53 G0 Z[SAFE_HEIGHT_MACH]
+G53 G0 Z[SAFE_HEIGHT] F[TRAVEL_SPEED]
 
-; Restore is simple return to previousXY? 
-; The original file had: G0 X[X0] Y[Y0]
-; We don't track X0/Y0 easily here unless we capture it at start.
-; This widget generates G-code sent effectively as a stream. 
-; Capturing start pos in a macro variable is good practice.
-
-; Done.
+; 7. Restore Position
+G0 X[X0] Y[Y0] F[H_TRAVEL_SPEED]
+G0 F[TRAVEL_SPEED]
         `;
     }
 };
