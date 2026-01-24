@@ -215,7 +215,7 @@
         setError('margin', !isNaN(parseFloat(document.getElementById('margin').value)));
 
         // Probing Settings
-        const positiveFields = ['probeDia', 'sizeX', 'sizeY', 'probeDeflection', 'retract', 'maxTravel', 'safeZ', 'feedSlow', 'feedFast', 'plateThickness', 'probeSpacing', 'probeDepth'];
+        const positiveFields = ['probeDia', 'sizeX', 'sizeY', 'retract', 'maxTravel', 'safeZ', 'feedSlow', 'feedFast', 'plateThickness', 'probeSpacing', 'probeDepth'];
         positiveFields.forEach(id => {
             const val = parseFloat(document.getElementById(id).value);
             // Some can be 0? Deflection maybe.
@@ -226,6 +226,9 @@
                 setError(id, !isNaN(val) && val >= 0);
             }
         });
+
+        // Deflection can be negative
+        setError('probeDeflection', !isNaN(parseFloat(document.getElementById('probeDeflection').value)));
 
         return isValid;
     }
