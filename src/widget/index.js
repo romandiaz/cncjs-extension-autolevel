@@ -26,29 +26,28 @@
     const defaultSettings = {
         // Autolevel
         height: 2,
-        margin: 2.5,
+        margin: 10,
         grid: 3,
         // Probing
-        probeDia: 6.00,
+        probeDia: 1.92,
         sizeX: 50,
         sizeY: 50,
-        probeDeflection: 0.36,
-        retract: 5,
+        probeDeflection: 0.29,
+        retract: 3,
         maxTravel: 25,
         safeZ: 20,
         feedSlow: 50,
         feedFast: 200,
-        plateThickness: 15,
-        plateThickness: 15,
+        plateThickness: 0.5,
         probeSpacing: 50,
-        probeDepth: 5,
+        probeDepth: 3,
         // Tool Change
         toolProbeX: 618.5,
         toolProbeY: 25,
         toolProbeZ: 0,
         safeZMachine: 0, // Default to slightly below limit? Or 0? G53 Z0 is usually safe height.
         travelSpeed: 500,
-        showToolChange: true,
+        showToolChange: false,
         // UI State
         activeTab: 'autolevel'
     };
@@ -427,9 +426,9 @@
 
         if (socket && controllerPort) {
             // Check if this is a "Control" command that should bypass the G-code buffer (e.g. while in Alarm/Hold)
-            if (cmd.startsWith('(autolevel_') && !cmd.includes('apply')) {
-                // EXCEPTION: Apply commands might need to be synchronous if we wanted them queue-ordered,
-                // but usually we want them to just set state.
+            if (cmd.startsWith('(autolevel')) {
+                // Send all autolevel commands via serial write to ensure they are intercepted immediately
+                // regardless of G-code queue state or controller parsing.
                 // However, fetching settings, skew, dumping mesh, clearing mesh are safe to run anytime.
                 // Let's whitelist the ones we KNOW cause hanging issues on startup:
                 // fetch_settings, skew, get_mesh
