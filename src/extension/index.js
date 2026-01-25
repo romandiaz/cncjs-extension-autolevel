@@ -36,7 +36,7 @@ program
   .option('-i, --id <id>', 'the id stored in the ~/.cncrc file')
   .option('-n, --name <name>', 'the user name stored in the ~/.cncrc file')
   .option('-s, --secret <secret>', 'the secret key stored in the ~/.cncrc file')
-  .option('-p, --port <port>', 'path or name of serial port', '/dev/ttyACM0')
+  .option('-p, --port <port>', 'path or name of serial port')
   .option('-b, --baudrate <baudrate>', 'baud rate', '115200')
   .option('-c, --config <filepath>', 'set the config file', '')
   .option('-o, --out-dir <path>', 'path to directory where to write output files, if not present output file is not written to disk', '')
@@ -63,7 +63,6 @@ var options = {
 
 var defaults = {
   secret: process.env['CNCJS_SECRET'],
-  port: '/dev/ttyACM0',
   baudrate: 115200,
   socketAddress: 'localhost',
   outDir: '',
@@ -154,12 +153,40 @@ let socket = io.connect('ws://' + options.socketAddress + ':' + options.socketPo
 
 socket.on('connect', () => {
   console.log('Connected to ' + url)
-  // Open port
-  socket.emit('open', options.port, {
-    baudrate: Number(options.baudrate),
-    controllerType: options.controllerType
-  })
+  // Open port logic
+  if (options.port) {
+    socket.emit('open', options.port, {
+      baudrate: Number(options.baudrate),
+      controllerType: options.controllerType
+    })
+  } else {
+    // Queries available ports to find the active one
+    socket.emit('list');
+  }
 })
+
+// Listen for available ports to Find one that is already 'inuse'
+socket.on('serialport:list', function (ports) {
+  // If we are already connected (options.port is set), ignore this.
+  if (options.port) return;
+
+  const connectedPort = ports.find(p => p.inuse);
+  if (connectedPort) {
+    console.log(`Auto-detected active port: ${connectedPort.port}`);
+    options.port = connectedPort.port;
+    if (!options.baudrate) options.baudrate = 115200;
+
+    // IMPORTANT: We must still emit 'open' to subscribe to the port events!
+    // CNCjs will just attach us to the existing session.
+    socket.emit('open', options.port, {
+      baudrate: Number(options.baudrate),
+      controllerType: options.controllerType
+    });
+
+  } else {
+    console.log('No active ports found in list. Waiting for user to connect in CNCjs...');
+  }
+});
 
 socket.on('error', (err) => {
   console.error('Connection error.', err)
@@ -173,10 +200,17 @@ socket.on('close', () => {
   console.log('Connection closed.')
 })
 
-socket.on('serialport:open', function (options) {
-  options = options || {}
+socket.on('serialport:open', function (connOptions) {
+  connOptions = connOptions || {}
 
-  console.log('Connected to port "' + options.port + '" (Baud rate: ' + options.baudrate + ')')
+  console.log('Connected to port "' + connOptions.port + '" (Baud rate: ' + connOptions.baudrate + ')')
+
+  // Update global options with the actual connected port
+  if (connOptions.port) {
+    options.port = connOptions.port
+    options.baudrate = connOptions.baudrate
+  }
+
   socket.emit('write', options.port, '(AL: connected)\n');
   callback(null, socket)
 })

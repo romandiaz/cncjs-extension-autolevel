@@ -38,18 +38,11 @@ The extension runs as a separate Node.js process that communicates with CNCjs.
 3.  **Start the extension (using PM2)**:
     It is recommended to use PM2 to manage the extension process alongside CNCjs.
 
-    1.  Edit `pm2.example.config.js` to match your ecosystem (e.g., update the `script` path or add `--port` args).
-
-    2.  Copy/rename the example config:
-        ```bash
-        cp pm2.example.config.js pm2.config.js
-        ```
-
-    3.  Start the process:
-        ```bash
-        pm2 start pm2.config.js
-        pm2 save
-        ```
+    Start the process:
+    ```bash
+    pm2 start pm2.config.js
+    pm2 save
+    ```
 
 ### 2. Widget (Frontend)
 The widget must be loaded into the CNCjs interface. You can either **mount** it (local) or **serve** it (network).

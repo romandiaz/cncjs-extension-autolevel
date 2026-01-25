@@ -1,6 +1,5 @@
 node_modules/
 .vscode/
-pm2.config.js
 autolevel_state.json
 __last_Z_probe.txt
 *.log

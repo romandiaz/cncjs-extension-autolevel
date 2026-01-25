@@ -384,6 +384,9 @@
                 socket.emit('open', controllerPort);
 
                 updateButtonState(true);
+
+                // Proactive fetch removed as serialport:open is now reliably triggered
+
                 // setTimeout(() => sendGcode('(autolevel_get_mesh)'), 500); // Removed to prevent duplicate call (handled in serialport:open)
             } else {
                 console.log('NO ACTIVE PORT FOUND.');
@@ -398,9 +401,6 @@
                 sendGcode('(autolevel_get_mesh)');
                 // Fetch settings when port opens to sync skew/file state
                 sendGcode('(autolevel_fetch_settings)');
-                sendGcode('(autolevel_fetch_settings)');
-                // Fetch current skew
-                sendGcode('(autolevel_skew)');
             }, 500);
         });
 
