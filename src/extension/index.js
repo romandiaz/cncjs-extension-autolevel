@@ -160,31 +160,43 @@ socket.on('connect', () => {
       controllerType: options.controllerType
     })
   } else {
-    // Queries available ports to find the active one
-    socket.emit('list');
+    // Start polling for active ports
+    checkActivePorts();
   }
 })
 
-// Listen for available ports to Find one that is already 'inuse'
+// State tracking
+let mountedPort = null;
+let retryTimer = null;
+function checkActivePorts() {
+  if (options.port) return; // Stop checking if connected
+  console.log('Poling for active ports...');
+  socket.emit('list');
+}
+
+// Listen for available ports
 socket.on('serialport:list', function (ports) {
   // If we are already connected (options.port is set), ignore this.
-  if (options.port) return;
+  if (options.port) {
+    if (retryTimer) clearTimeout(retryTimer);
+    return;
+  }
 
-  const connectedPort = ports.find(p => p.inuse);
+  const connectedPort = ports.find(p => p.inuse || p.isOpen);
   if (connectedPort) {
     console.log(`Auto-detected active port: ${connectedPort.port}`);
-    options.port = connectedPort.port;
-    if (!options.baudrate) options.baudrate = 115200;
+    if (retryTimer) clearTimeout(retryTimer);
 
-    // IMPORTANT: We must still emit 'open' to subscribe to the port events!
-    // CNCjs will just attach us to the existing session.
-    socket.emit('open', options.port, {
-      baudrate: Number(options.baudrate),
-      controllerType: options.controllerType
+    // Trigger the open event.
+    socket.emit('open', connectedPort.port, {
+      baudrate: 115200, // Default
+      controllerType: 'Grbl'
     });
-
   } else {
-    console.log('No active ports found in list. Waiting for user to connect in CNCjs...');
+    // If not found, check again in 2 seconds
+    console.log('No active ports found. Retrying in 2s...');
+    if (retryTimer) clearTimeout(retryTimer);
+    retryTimer = setTimeout(checkActivePorts, 2000);
   }
 });
 
@@ -198,18 +210,32 @@ socket.on('error', (err) => {
 
 socket.on('close', () => {
   console.log('Connection closed.')
+  mountedPort = null;
 })
 
 socket.on('serialport:open', function (connOptions) {
   connOptions = connOptions || {}
+  console.log('serialport:open event for ' + connOptions.port);
 
-  console.log('Connected to port "' + connOptions.port + '" (Baud rate: ' + connOptions.baudrate + ')')
-
-  // Update global options with the actual connected port
-  if (connOptions.port) {
-    options.port = connOptions.port
-    options.baudrate = connOptions.baudrate
+  // Prevent infinite message loops / duplicate attachments
+  if (mountedPort === connOptions.port) {
+    console.log('Already attached to ' + mountedPort + ', ignoring duplicate event.');
+    return;
   }
+
+  // Update Global State
+  options.port = connOptions.port;
+  if (connOptions.baudrate) options.baudrate = connOptions.baudrate;
+  if (!options.baudrate) options.baudrate = 115200;
+
+  mountedPort = options.port;
+  console.log('Attaching to port "' + options.port + '" (Baud rate: ' + options.baudrate + ')');
+
+  // IMPORTANT: We must emit 'open' to subscribe to the port events
+  socket.emit('open', options.port, {
+    baudrate: Number(options.baudrate),
+    controllerType: options.controllerType
+  });
 
   socket.emit('write', options.port, '(AL: connected)\n');
   callback(null, socket)
