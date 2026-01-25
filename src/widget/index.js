@@ -394,14 +394,29 @@
         });
 
         socket.on('serialport:open', function (options) {
-            console.log('PORT OPEN: ' + options.port);
-            controllerPort = options.port;
+            console.log('PORT OPEN EVENT:', options);
+            if (options && options.port) {
+                controllerPort = options.port;
+            } else {
+                console.warn("PORT OPEN event missing port! Triggering list...");
+                socket.emit('serialport:list');
+                socket.emit('list');
+            }
+
+            console.log("Setting widget state: Connected (Port: " + controllerPort + ")");
             updateButtonState(true);
+
             setTimeout(() => {
                 sendGcode('(autolevel_get_mesh)');
-                // Fetch settings when port opens to sync skew/file state
                 sendGcode('(autolevel_fetch_settings)');
+                // If we don't know the port (weird event), the get_mesh might fail, but list handler will catch it eventually.
             }, 500);
+        });
+
+        socket.on('serialport:change', function (options) {
+            console.log('PORT CHANGE EVENT:', options);
+            socket.emit('serialport:list');
+            socket.emit('list');
         });
 
         socket.on('serialport:close', function (options) {
@@ -528,6 +543,14 @@
                 // Check if it looks like an AL command
                 if (cleanLine.includes('(AL:')) {
                     // console.log('AL CMD Found: ' + cleanLine);
+                }
+
+                // Wake up the widget if we see the connection message
+                if (cleanLine.includes('(AL: connected)')) {
+                    console.log("EXTENSION: Connected message received. Waking up widget...");
+                    if (!controllerPort) controllerPort = 'ActivePort'; // Placeholder if we don't know the port yet, but we are definitely connected.
+                    updateButtonState(true);
+                    sendGcode('(autolevel_fetch_settings)');
                 }
 
                 // Check for settings response

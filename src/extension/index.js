@@ -245,6 +245,21 @@ socket.on('serialport:error', function (options) {
   callback(new Error('Error opening serial port "' + options.port + '"'))
 })
 
+socket.on('serialport:close', function (connOptions) {
+  connOptions = connOptions || {}
+  console.log('serialport:close event for ' + connOptions.port);
+
+  if (options.port === connOptions.port) {
+    // Reset state
+    mountedPort = null;
+    options.port = null;
+
+    console.log('Port closed. Restarting polling for active ports...');
+    if (retryTimer) clearTimeout(retryTimer);
+    checkActivePorts();
+  }
+})
+
 // eslint-disable-next-line handle-callback-err
 function callback(err, socket) {
 
