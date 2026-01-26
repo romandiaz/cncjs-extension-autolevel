@@ -697,12 +697,18 @@ button:disabled.btn-center {
 }
 
 /* --- Tooltips --- */
+/* --- Tooltips --- */
+[data-tooltip] {
+    position: relative;
+    cursor: help;
+    /* Required for absolute positioning of bubble */
+}
+
 .tooltip-icon {
     display: inline-block;
     margin-left: 4px;
     color: #999;
     cursor: help;
-    position: relative;
     font-size: 11px;
 }
 
@@ -711,12 +717,14 @@ button:disabled.btn-center {
 }
 
 /* Tooltip Bubble */
-.tooltip-icon:hover::after {
+[data-tooltip]:hover::after {
     content: attr(data-tooltip);
     position: absolute;
-    bottom: 150%;
+    bottom: 100%;
+    /* Move above element */
     left: 50%;
-    transform: translateX(-50%);
+    transform: translateX(-50%) translateY(-8px);
+    /* Add gap */
     background-color: #333;
     color: #fff;
     padding: 5px 8px;
@@ -731,19 +739,20 @@ button:disabled.btn-center {
 }
 
 /* Tooltip Arrow */
-.tooltip-icon:hover::before {
+[data-tooltip]:hover::before {
     content: '';
     position: absolute;
-    bottom: 120%;
-    /* Slightly adjust to touch bubble */
+    bottom: 100%;
     left: 50%;
-    transform: translateX(-50%);
+    transform: translateX(-50%) translateY(0px);
+    /* Position at edge */
     border-width: 5px;
     border-style: solid;
     border-color: #333 transparent transparent transparent;
     z-index: 1000;
     opacity: 0;
     animation: fadeIn 0.2s forwards;
+    pointer-events: none;
 }
 
 @keyframes fadeIn {

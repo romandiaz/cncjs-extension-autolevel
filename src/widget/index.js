@@ -253,7 +253,27 @@
                 btnAutolevel.style.display = 'none';
             } else {
                 btnAutolevel.style.display = '';
-                btnAutolevel.title = !connected ? "Connect to controller first" : (!inputsValid ? "Check invalid settings" : "");
+
+                // Disable if not connected, invalid inputs, OR no G-code loaded
+                const noGcode = !currentGcodeFile || currentGcodeFile.length === 0;
+                const shouldDisable = disabled || noGcode;
+                btnAutolevel.disabled = shouldDisable;
+
+                const wrapper = document.getElementById('autolevel-wrapper');
+
+                if (!connected) {
+                    if (wrapper) wrapper.setAttribute('data-tooltip', "Connect to controller first");
+                    btnAutolevel.removeAttribute('title');
+                } else if (!inputsValid) {
+                    if (wrapper) wrapper.setAttribute('data-tooltip', "Check invalid settings");
+                    btnAutolevel.removeAttribute('title');
+                } else if (noGcode) {
+                    if (wrapper) wrapper.setAttribute('data-tooltip', "Load a G-code file first");
+                    btnAutolevel.removeAttribute('title');
+                } else {
+                    if (wrapper) wrapper.removeAttribute('data-tooltip');
+                    btnAutolevel.title = "Stop Autolevel"; // Keep title for enabled/running state if desired, or remove to just rely on text
+                }
             }
         }
 
@@ -370,6 +390,13 @@
             // Ideally the extension sends "Skew Applied" status? 
             // For now, let's just trigger a settings fetch which will refresh the angle display too.
             sendGcode('(autolevel_fetch_settings)');
+        });
+
+        socket.on('gcode:unload', function () {
+            console.log('GCODE UNLOADED');
+            currentGcodeFile = "";
+            // Update button state immediately
+            updateButtonState(socket && controllerPort);
         });
 
         socket.on('serialport:list', function (ports) {
